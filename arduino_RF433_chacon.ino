@@ -1,6 +1,7 @@
 static const int PIN_DIGITAL_IN = 2;
-static const bool VERBOSE = false;
-#define DIAGNOSTICS 0
+static const bool MAJORLOG = true;
+static const bool MINORLOG = false;
+#define MEASUREMENT 0
 
 static const unsigned long MIN_PEAK_SPACING = 500;
 static const unsigned long MAX_PEAK_SPACING = 600;
@@ -9,43 +10,48 @@ static const unsigned long MIN_PACKET_SPACING = 10000;
 static const unsigned long MAX_PACKET_SPACING = 11000;
 static const unsigned long MIN_PACKET_PREAMBLE = 2800;
 static const unsigned long MAX_PACKET_PREAMBLE = 3200;
-static const unsigned long MAX_PAYLOAD_TIMEOUT = 32ul * (MAX_VALE_SPACING + 3 * MAX_PEAK_SPACING);
+static const unsigned long MAX_PAYLOAD_TIMEOUT = 32ul * (MAX_VALE_SPACING + 2 * MAX_PEAK_SPACING);
 
 class ProtocolHandler {
+  unsigned long train_handled = 0;
+  unsigned long train_timeout_micros;
+  int train_timeout_prolongements;
   unsigned long last_rise_micros = micros();
-  unsigned long packet_handled = 0;
-  unsigned long packet_timeout_micros;
   enum { IDLE = -3, BOTCHED_PACKET = -2, DELIMITED = -1, OPENED = 0 };
   int reception_stage;
   int extra_peaks_received;
   unsigned long bits_received;
-#if DIAGNOSTICS
+#if MEASUREMENT
   unsigned long delimiter_micros;
   unsigned long preamble_micros;
 #endif
 
   void abort_packet_train() {
     digitalWrite(LED_BUILTIN, LOW);
-    packet_handled = 0;
+    train_handled = 0;
     reception_stage = IDLE;
   }
 
   void cancel_packet() {
-    reception_stage = BOTCHED_PACKET;
+    if (train_handled) {
+      reception_stage = BOTCHED_PACKET;
+    } else {
+      abort_packet_train();
+    }
   }
 
   void packet_delimited() {
-    if (VERBOSE && reception_stage > OPENED) {
+    if (MAJORLOG && reception_stage > OPENED) {
       if (reception_stage != 32) {
         Serial.print("Invalid vale count ");
         Serial.println(reception_stage);
       } else if (extra_peaks_received != int(bits_received & 1)) {
         Serial.print("Invalid final peak count ");
         Serial.println(1 + extra_peaks_received);
-      } else if (packet_handled == 0) {
+      } else if (train_handled == 0) {
         Serial.println("Packet received but missed by main loop");
-      } else if (packet_handled != bits_received) {
-        Serial.print(packet_handled, BIN);
+      } else if (train_handled != bits_received) {
+        Serial.print(train_handled, BIN);
         Serial.println(" received, but then");
         Serial.print(bits_received, BIN);
         Serial.println(" received!");
@@ -61,34 +67,47 @@ public:
 
     if (duration >= MIN_PACKET_SPACING) {
       packet_delimited();
-#     if DIAGNOSTICS
+#     if MEASUREMENT
         delimiter_micros = duration;
 #     endif
-      if (reception_stage != BOTCHED_PACKET) {
-        packet_timeout_micros = now + MAX_PACKET_PREAMBLE + MAX_PAYLOAD_TIMEOUT + MAX_PACKET_SPACING;
+      if (train_handled && reception_stage != BOTCHED_PACKET) {
+        ++train_timeout_prolongements;
+        train_timeout_micros = now + MAX_PACKET_PREAMBLE + MAX_PAYLOAD_TIMEOUT + MAX_PACKET_SPACING;
       }
       reception_stage = DELIMITED;
     } else if (reception_stage == DELIMITED) {
-      if (duration < MIN_PACKET_PREAMBLE || duration > MAX_PACKET_PREAMBLE) {
-        if (VERBOSE) {
+      if (duration < MIN_PACKET_PREAMBLE) {
+        if (MINORLOG && duration > MIN_PACKET_PREAMBLE * 0.75) {
           Serial.print(duration);
-          Serial.println(" µs rise after delimiter");
+          Serial.println("µs short preamble after delimiter");
         }
         cancel_packet();
         return;
       }
-#     if DIAGNOSTICS
-        preamble_micros = duration;
-#     endif
+      if (duration > MAX_PACKET_PREAMBLE) {
+        if (MINORLOG && duration < MAX_PACKET_PREAMBLE * 1.25) {
+          Serial.print(duration);
+          Serial.println("µs long preamble after delimiter");
+        }
+        cancel_packet();
+        return;
+      }
+      if (!train_handled) {
+        digitalWrite(LED_BUILTIN, HIGH);
+#       if MEASUREMENT
+          preamble_micros = duration;
+#       endif
+        train_timeout_prolongements = 0;
+      }
+      train_timeout_micros = now + MAX_PAYLOAD_TIMEOUT + MAX_PACKET_SPACING;
       reception_stage = OPENED;
       extra_peaks_received = 0;
       bits_received = 0;
-      packet_timeout_micros = now + MAX_PAYLOAD_TIMEOUT + MAX_PACKET_SPACING;
     } else if (reception_stage >= OPENED) {
       if (duration < MIN_PEAK_SPACING) {
-        if (VERBOSE) {
+        if (MINORLOG) {
           Serial.print(duration);
-          Serial.print(" µs peak seen in vale ");
+          Serial.print("µs peak in vale #");
           Serial.println(reception_stage);
         }
         cancel_packet();
@@ -98,9 +117,9 @@ public:
         ++extra_peaks_received;
       } else {
         if (duration <= MAX_VALE_SPACING) {
-          if (VERBOSE) {
+          if (MINORLOG) {
             Serial.print(duration);
-            Serial.print(" µs vale seen in vale ");
+            Serial.print("µs vale after vale #");
             Serial.println(reception_stage);
           }
           cancel_packet();
@@ -108,7 +127,7 @@ public:
         }
         const int bit = 1 + int(bits_received & 1) - extra_peaks_received;
         if (bit < 0 || bit > 1) {
-          if (VERBOSE) {
+          if (MINORLOG) {
             Serial.print("Invalid peak count ");
             Serial.println(1 + extra_peaks_received);
           }
@@ -117,9 +136,6 @@ public:
         }
         bits_received = (bits_received << 1) | bit;
         extra_peaks_received = 0;
-        if (reception_stage == OPENED) {
-          digitalWrite(LED_BUILTIN, HIGH);
-        }
         ++reception_stage;
       }
     }
@@ -131,23 +147,25 @@ public:
     const unsigned long ss_last_rise_micros = last_rise_micros;
     const bool has_new = reception_stage == 32
                       && extra_peaks_received == int(bits_received & 1)
-                      && bits_received != packet_handled;
+                      && bits_received != train_handled;
     interrupts();
     const unsigned long now = micros();
-    if (packet_handled && now >= packet_timeout_micros) {
-      if (VERBOSE) {
-        Serial.println("Stop expecting packet repeats");
+    if (train_handled && now >= train_timeout_micros) {
+      if (MAJORLOG) {
+        Serial.print("Stop expecting rest of packet train after ");
+        Serial.print(train_timeout_prolongements);
+        Serial.println(" prolongements");
       }
       abort_packet_train();
     }
     if (has_new && now > ss_last_rise_micros + MAX_PEAK_SPACING) {
-      packet_handled = ss_bits_received;
-#     if DIAGNOSTICS
+      train_handled = ss_bits_received;
+#     if MEASUREMENT
         Serial.print("After ");
         Serial.print(delimiter_micros);
-        Serial.print(" + ");
+        Serial.print("µs delimiter + ");
         Serial.print(preamble_micros);
-        Serial.println(" µs:");
+        Serial.println("µs preamble:");
 #     endif
       return ss_bits_received;
     } else {
