@@ -1,4 +1,8 @@
+#include <EEPROM.h>
+
 static const int PIN_DIGITAL_IN = 2;
+static const int TRANSMITTER_BUTTONS_STORED = 4;
+static const unsigned INITIAL_LEARNING_MILLIS = 5000;
 static const bool MAJORLOG = true;
 static const bool MINORLOG = false;
 #define MEASUREMENT 0
@@ -180,12 +184,28 @@ class Packet {
 public:
   explicit Packet(unsigned long bits): bits(bits) {}
 
+  bool matches(unsigned long some_transmitter_and_button) const {
+    if (multicast()) {
+      return transmitter() == (some_transmitter_and_button >> 6);
+    } else {
+      return transmitter_and_button() == some_transmitter_and_button;
+    }
+  }
+
   unsigned long transmitter() const {
     return bits >> 6;
   }
 
+  unsigned long transmitter_and_button() const {
+    return bits & ~(1 << 5 | 1 << 4);
+  }
+
   bool multicast() const {
     return (bits >> 5) & 1;
+  }
+
+  bool on_or_off() const {
+    return (bits >> 4) & 1;
   }
 
   unsigned page() const {
@@ -195,9 +215,17 @@ public:
   unsigned row() const {
     return bits & 3;
   }
-
-  bool on_or_off() const {
-    return (bits >> 4) & 1;
+ 
+  void print_transmitter_and_button() const {
+    Serial.print(" transmitter ");
+    Serial.print(transmitter(), HEX);
+    if (multicast()) {
+      Serial.print(" all ");
+    } else {
+      Serial.print(" button ");
+      Serial.write('A' + page());
+      Serial.print(row() + 1);
+    }
   }
 };
 
@@ -207,28 +235,122 @@ static void handleRise() {
   handler.handleRise();
 }
 
+class TransmitterButtonStorage {
+  unsigned long transmitter_buttons[TRANSMITTER_BUTTONS_STORED];
+  int transmitter_button_count = 0;
+  bool dirty = false;
+
+  void dump(const char* prefix) {
+    for (int i = 0; i < transmitter_button_count; ++i) {
+      Serial.print(prefix);
+      Packet(transmitter_buttons[i]).print_transmitter_and_button();
+      Serial.println();
+    }
+  }
+
+public:
+  void load() {
+    EEPROM.get(0, transmitter_buttons);
+    while (transmitter_button_count < TRANSMITTER_BUTTONS_STORED
+          && transmitter_buttons[transmitter_button_count] != ~0ul) {
+      ++transmitter_button_count;
+    }
+    dump("Initial");
+  }
+
+  bool recognizes(Packet packet) const {
+    for (int i = 0; i < transmitter_button_count; ++i) {
+      if (packet.matches(transmitter_buttons[i])) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void remember(unsigned long transmitter_button) {
+    if (!recognizes(Packet(transmitter_button))) {
+      if (transmitter_button_count == TRANSMITTER_BUTTONS_STORED) {
+        for (int i = 1; i < TRANSMITTER_BUTTONS_STORED; ++i) {
+          transmitter_buttons[i - 1] = transmitter_buttons[i];
+        }
+        transmitter_button_count -= 1;
+      }
+      transmitter_buttons[transmitter_button_count] = transmitter_button;
+      transmitter_button_count += 1;
+      dirty = true;
+    }
+  }
+
+  void forget(unsigned long transmitter_button) {
+    int i = 0;
+    int target = 0;
+    while (i < transmitter_button_count) {
+      if (transmitter_buttons[i] == transmitter_button) {
+        dirty = true;
+      } else {
+        transmitter_buttons[target] = transmitter_buttons[i];
+        ++target;
+      }
+      ++i;
+    }
+    transmitter_button_count += target - i;
+    for (int i = transmitter_button_count; i < TRANSMITTER_BUTTONS_STORED; ++i) {
+        transmitter_buttons[i] = ~0ul;
+    }
+  }
+
+  void store() {
+    if (dirty) {
+      EEPROM.put(0, transmitter_buttons);
+      dump("Updated");
+    }
+  }
+};
+
+static TransmitterButtonStorage transmitterButtonStorage;
+
+static void initial_learning() {
+  const unsigned long boot_millis = millis();
+  unsigned long passed_millis;
+  transmitterButtonStorage.load();
+
+  while ((passed_millis = millis() - boot_millis) < INITIAL_LEARNING_MILLIS) {
+    digitalWrite(LED_BUILTIN, (passed_millis >> 9) & 1);
+    if (auto bits = handler.receive()) {
+      auto packet = Packet(bits);
+      if (!packet.multicast()) {
+        if (packet.on_or_off()) {
+          transmitterButtonStorage.remember(packet.transmitter_and_button());
+        } else {
+          transmitterButtonStorage.forget(packet.transmitter_and_button());
+        }
+      }
+    }
+  }
+  transmitterButtonStorage.store();
+}
+
 void setup() {
   pinMode(PIN_DIGITAL_IN, INPUT);
   pinMode(LED_BUILTIN, OUTPUT);
   attachInterrupt(digitalPinToInterrupt(PIN_DIGITAL_IN), handleRise, RISING);
   Serial.begin(115200);
   while (!Serial); // wait for serial port to connect. Needed for native USB port only
+  initial_learning();
 }
 
 void loop() {
   if (auto bits = handler.receive()) {
     Serial.print("Received ");
     Serial.print(bits, BIN);
-    Packet packet(bits);
-    Serial.print(": transmitter ");
-    Serial.print(packet.transmitter(), HEX);
-    if (packet.multicast()) {
-      Serial.print(" all ");
+    auto p = Packet(bits);
+    Serial.print(":");
+    p.print_transmitter_and_button();
+    Serial.print(p.on_or_off() ? "①" : "⓪");
+    if (transmitterButtonStorage.recognizes(p)) {
+      Serial.println(", hallelujah!");
     } else {
-      Serial.print(" button ");
-      Serial.write('A' + packet.page());
-      Serial.print(packet.row() + 1);
+      Serial.println(", never mind");
     }
-    Serial.println(packet.on_or_off() ? "①" : "⓪");
   }
 }
