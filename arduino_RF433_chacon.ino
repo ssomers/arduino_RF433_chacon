@@ -2,13 +2,12 @@
 #include "TransmitterButtonStorage.h"
 
 static const int PIN_DIGITAL_IN = 2;
-static const int PIN_DIGITAL_OUT_1 = 11;
-static const int PIN_DIGITAL_OUT_2 = 12;
+static const int LEVELS = 2;
+static const int PIN_DIGITAL_OUT[LEVELS] = { 11, 12 };
 static const unsigned INITIAL_LEARNING_MILLIS = 500;
 
 static ProtocolHandler<LogLevel::MAJOR> handler;
 static TransmitterButtonStorage transmitterButtonStorage;
-static int speed = 0;
 
 static void initial_learning() {
   const unsigned long boot_millis = millis();
@@ -32,8 +31,8 @@ static void initial_learning() {
 void setup() {
   Serial.begin(115200);
   pinMode(PIN_DIGITAL_IN, INPUT);
-  pinMode(PIN_DIGITAL_OUT_1, OUTPUT);
-  pinMode(PIN_DIGITAL_OUT_2, OUTPUT);
+  pinMode(PIN_DIGITAL_OUT[0], OUTPUT);
+  pinMode(PIN_DIGITAL_OUT[1], OUTPUT);
   pinMode(LED_BUILTIN, OUTPUT);
   attachInterrupt(digitalPinToInterrupt(PIN_DIGITAL_IN), [](){handler.handleRise();}, RISING);
   while (!Serial); // wait for serial port to connect. Needed for native USB port only
@@ -42,35 +41,25 @@ void setup() {
 
 void loop() {
   delay(3);
-  if (auto bits = handler.receive()) {
+  auto bits = handler.receive();
+  if (bits != Bits::NO_PACKET) {
     auto p = Packet(bits);
+    Serial.print("Received");
     p.print_transmitter_and_button();
     Serial.print(p.on_or_off() ? "①" : "⓪");
     if (transmitterButtonStorage.recognizes(p)) {
       Serial.println(", hallelujah!");
       if (p.on_or_off()) {
-        switch (speed) {
-          case 0: {
-            digitalWrite(PIN_DIGITAL_OUT_1, HIGH);
-            ++speed;
-            break;
-          }
-          case 1: {
-            digitalWrite(PIN_DIGITAL_OUT_2, HIGH);
-            ++speed;
+        for (int i = 0; i < LEVELS; ++i) {
+          if (digitalRead(PIN_DIGITAL_OUT[i]) == LOW) {
+            digitalWrite(PIN_DIGITAL_OUT[i], HIGH);
             break;
           }
         }
       } else {
-        switch (speed) {
-          case 2: {
-            digitalWrite(PIN_DIGITAL_OUT_2, LOW);
-            --speed;
-            break;
-          }
-          case 1: {
-            digitalWrite(PIN_DIGITAL_OUT_1, LOW);
-            --speed;
+        for (int i = LEVELS - 1; i >= 0; --i) {
+          if (digitalRead(PIN_DIGITAL_OUT[i]) == HIGH) {
+            digitalWrite(PIN_DIGITAL_OUT[i], LOW);
             break;
           }
         }

@@ -2,7 +2,7 @@ class Packet {
   const unsigned long bits;
 
 public:
-  explicit Packet(unsigned long bits): bits(bits) {}
+  explicit Packet(unsigned long bits) : bits(bits) {}
 
   bool matches(unsigned long some_transmitter_and_button) const {
     if (multicast()) {

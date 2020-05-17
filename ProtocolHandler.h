@@ -3,6 +3,7 @@
 #define MEASUREMENT 0
 
 enum class LogLevel { NONE, MAJOR, MINOR };
+enum Bits : unsigned long { NO_PACKET = ~0ul };
 
 template <LogLevel logLevel>
 class ProtocolHandler {
@@ -23,20 +24,20 @@ class ProtocolHandler {
   int extra_peaks_received;
   unsigned long bits_received;
   unsigned long packet_complete_micros;
-  unsigned long train_handled = 0;
+  unsigned long train_handled = Bits::NO_PACKET;
 #if MEASUREMENT
   unsigned long delimiter_micros;
-  unsigned long preamble_micros;
+  unsigned long times[FINISHED + 2];
 #endif
 
   void abort_packet_train() {
     digitalWrite(LED_BUILTIN, LOW);
-    train_handled = 0;
+    train_handled = Bits::NO_PACKET;
     reception_stage = IDLE;
   }
 
   void cancel_packet() {
-    if (train_handled) {
+    if (train_handled != Bits::NO_PACKET) {
       reception_stage = BOTCHED_PACKET;
     } else {
       abort_packet_train();
@@ -53,7 +54,7 @@ class ProtocolHandler {
       } else if (extra_peaks_received != int(bits_received & 1)) {
         Serial.print("Invalid final peak count ");
         Serial.println(1 + extra_peaks_received);
-      } else if (train_handled == 0) {
+      } else if (train_handled == Bits::NO_PACKET) {
         Serial.println("Packet received but missed by main loop");
       } else if (train_handled != bits_received) {
         Serial.print(train_handled, BIN);
@@ -74,6 +75,7 @@ public:
       packet_delimited();
 #     if MEASUREMENT
         delimiter_micros = duration;
+        times[0] = now;
 #     endif
       reception_stage = DELIMITED;
     } else if (reception_stage == DELIMITED) {
@@ -93,10 +95,10 @@ public:
         cancel_packet();
         return;
       }
-      if (!train_handled) {
+      if (train_handled == Bits::NO_PACKET) {
         digitalWrite(LED_BUILTIN, HIGH);
 #       if MEASUREMENT
-          preamble_micros = duration;
+          times[1] = now;
 #       endif
       }
       reception_stage = OPENED;
@@ -136,8 +138,13 @@ public:
         bits_received = (bits_received << 1) | bit;
         extra_peaks_received = 0;
         ++reception_stage;
+#       if MEASUREMENT
+          if (reception_stage <= FINISHED) {
+            times[1 + reception_stage] = now;
+          }
+#       endif
         if (reception_stage == FINISHED) {
-          if (!train_handled) {
+          if (train_handled == Bits::NO_PACKET) {
             packet_complete_micros = now + PARITY_TIMEOUT;
           }
         }
@@ -151,35 +158,42 @@ public:
     const unsigned long packet_complete = now - packet_complete_micros;
     const bool has_new = reception_stage == FINISHED
                       && extra_peaks_received == int(bits_received & 1);
-    if (packet_complete >> 31) {
-      // packet_complete_micros is in the future (regardless of overflow),
-      // or it is zero and meaningless at the moment.
-      interrupts();
-      return 0;
-    } else if (has_new && bits_received != train_handled) {
-      train_handled = bits_received;
-      interrupts();
-#     if MEASUREMENT
-        Serial.print("After ");
-        Serial.print(delimiter_micros);
-        Serial.print("µs delimiter + ");
-        Serial.print(preamble_micros);
-        Serial.println("µs preamble:");
-#     endif
-      Serial.print("At ");
-      Serial.print(now);
-      Serial.print(" received ");
-      return train_handled;
-    } else if (train_handled && packet_complete > TRAIN_TIMEOUT) {
-      abort_packet_train();
-      interrupts();
-      if (logLevel >= LogLevel::MAJOR) {
-        Serial.println("Stop expecting rest of packet train");
+    if ((packet_complete >> 31) == 0) {
+      // Otherwise packet_complete_micros is in the future (regardless of overflow),
+      // or zero and meaningless at the moment.
+      if (has_new && bits_received != train_handled) {
+        train_handled = bits_received;
+        reception_stage = IDLE;
+  #     if MEASUREMENT
+          Serial.print("After ");
+          Serial.print(delimiter_micros);
+          Serial.println("µs delimiter");
+          for (int i = 1; i < FINISHED + 2; ++i) {
+            Serial.print("  ");
+            Serial.print(times[i]);
+            Serial.print(" start of bit ");
+            Serial.println(i);
+          }
+        Serial.print("  ");
+        Serial.print(now);
+        Serial.println(" posted");
+        Serial.print("  ");
+        Serial.print(micros());
+        Serial.println(" finishing this debug output");
+  #     endif
+        interrupts();
+        return train_handled;
       }
-      return 0;
-    } else {
-      interrupts();
-      return 0;
+      if (train_handled != Bits::NO_PACKET && packet_complete > TRAIN_TIMEOUT) {
+        abort_packet_train();
+        interrupts();
+        if (logLevel >= LogLevel::MAJOR) {
+          Serial.println("Stop expecting rest of packet train");
+        }
+        return Bits::NO_PACKET;
+      }
     }
+    interrupts();
+    return Bits::NO_PACKET;
   }
 };
