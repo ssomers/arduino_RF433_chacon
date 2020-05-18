@@ -2,10 +2,10 @@
 
 #define MEASUREMENT 0
 
-enum class LogLevel { NONE, MAJOR, MINOR };
+enum class LogEvents { NONE, SOME, ALL };
 enum Bits : unsigned long { NO_PACKET = ~0ul };
 
-template <LogLevel logLevel>
+template <LogEvents logEvents>
 class ProtocolHandler {
     static const unsigned long MIN_PEAK_SPACING = 500;
     static const unsigned long MAX_PEAK_SPACING = 600;
@@ -19,7 +19,7 @@ class ProtocolHandler {
     static const unsigned long TRAIN_TIMEOUT = 3 * MAX_PACKET_SPACING + 4 * (MAX_PACKET_PREAMBLE + MAX_PAYLOAD);
 
     unsigned long last_rise_micros = micros();
-    enum { IDLE = -3, BOTCHED_PACKET = -2, DELIMITED = -1, OPENED = 0, FINISHED = 32 };
+    enum { IDLE = -2, DELIMITED = -1, OPENED = 0, FINISHED = 32 };
     int reception_stage;
     int extra_peaks_received;
     unsigned long bits_received;
@@ -38,16 +38,16 @@ class ProtocolHandler {
 
     void cancel_packet() {
       if (train_handled != Bits::NO_PACKET) {
-        reception_stage = BOTCHED_PACKET;
+        reception_stage = IDLE;
       } else {
         abort_packet_train();
       }
     }
 
     void packet_delimited() {
-      if (logLevel >= LogLevel::MAJOR && reception_stage > 0) {
+      if (logEvents >= LogEvents::SOME && reception_stage > 0) {
         if (reception_stage != 32) {
-          if (reception_stage > 1 || logLevel >= LogLevel::MINOR) {
+          if (reception_stage > 1 || logEvents >= LogEvents::ALL) {
             Serial.print("Invalid vale count ");
             Serial.println(reception_stage);
           }
@@ -80,7 +80,7 @@ class ProtocolHandler {
         reception_stage = DELIMITED;
       } else if (reception_stage == DELIMITED) {
         if (duration < MIN_PACKET_PREAMBLE) {
-          if (logLevel >= LogLevel::MINOR) {
+          if (logEvents >= LogEvents::ALL) {
             Serial.print(duration);
             Serial.println("µs short preamble after delimiter");
           }
@@ -88,7 +88,7 @@ class ProtocolHandler {
           return;
         }
         if (duration > MAX_PACKET_PREAMBLE) {
-          if (logLevel >= LogLevel::MINOR) {
+          if (logEvents >= LogEvents::ALL) {
             Serial.print(duration);
             Serial.println("µs long preamble after delimiter");
           }
@@ -106,7 +106,7 @@ class ProtocolHandler {
         bits_received = 0;
       } else if (reception_stage >= OPENED) {
         if (duration < MIN_PEAK_SPACING) {
-          if (logLevel >= LogLevel::MINOR) {
+          if (logEvents >= LogEvents::ALL) {
             Serial.print(duration);
             Serial.print("µs peak in vale #");
             Serial.println(reception_stage);
@@ -118,7 +118,7 @@ class ProtocolHandler {
           ++extra_peaks_received;
         } else {
           if (duration <= MAX_VALE_SPACING) {
-            if (logLevel >= LogLevel::MINOR) {
+            if (logEvents >= LogEvents::ALL) {
               Serial.print(duration);
               Serial.print("µs vale after vale #");
               Serial.println(reception_stage);
@@ -128,7 +128,7 @@ class ProtocolHandler {
           }
           const int bit = 1 + int(bits_received & 1) - extra_peaks_received;
           if (bit < 0 || bit > 1) {
-            if (logLevel >= LogLevel::MINOR) {
+            if (logEvents >= LogEvents::ALL) {
               Serial.print("Invalid peak count ");
               Serial.println(1 + extra_peaks_received);
             }
@@ -187,7 +187,7 @@ class ProtocolHandler {
         if (train_handled != Bits::NO_PACKET && packet_complete > TRAIN_TIMEOUT) {
           abort_packet_train();
           interrupts();
-          if (logLevel >= LogLevel::MAJOR) {
+          if (logEvents >= LogEvents::SOME) {
             Serial.println("Stop expecting rest of packet train");
           }
           return Bits::NO_PACKET;

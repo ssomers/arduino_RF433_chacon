@@ -6,7 +6,7 @@ static const int LEVELS = 2;
 static const int PIN_DIGITAL_OUT[LEVELS] = { 11, 12 };
 static const unsigned INITIAL_LEARNING_MILLIS = 500;
 
-static ProtocolHandler<LogLevel::MAJOR> handler;
+static ProtocolHandler<LogEvents::SOME> handler;
 static TransmitterButtonStorage transmitterButtonStorage;
 
 static void initial_learning() {
