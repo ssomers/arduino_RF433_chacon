@@ -1,10 +1,12 @@
+#include "pitches.h"
 #include "ProtocolHandler.h"
 #include "TransmitterButtonStorage.h"
 
 static const int PIN_DIGITAL_IN = 2;
+static const int PIN_BUZZER = 12;
 static const int LEVELS = 2;
-static const int PIN_DIGITAL_OUT[LEVELS] = { 11, 12 };
-static const unsigned INITIAL_LEARNING_MILLIS = 500;
+static const int PIN_DIGITAL_OUT[LEVELS] = { 3, 4 };
+static const unsigned INITIAL_LEARNING_MILLIS = 4000;
 
 static ProtocolHandler<LogEvents::SOME> handler;
 static TransmitterButtonStorage transmitterButtonStorage;
@@ -16,21 +18,60 @@ static void initial_learning() {
   transmitterButtonStorage.dump("Initial");
   Serial.println("Start learning");
   unsigned long passed_millis;
-  while ((passed_millis = millis() - boot_millis) < INITIAL_LEARNING_MILLIS) {
-    digitalWrite(LED_BUILTIN, (passed_millis >> 9) & 1);
-    if (auto bits = handler.receive()) {
-      transmitterButtonStorage.learn(Packet(bits));
+  unsigned long buzz_millis = boot_millis;
+  while ((passed_millis = millis()) < boot_millis + INITIAL_LEARNING_MILLIS) {
+    if (passed_millis >= buzz_millis) {
+      buzz_millis += 1000;
+      tone(PIN_BUZZER, NOTE_E4, 30);
+    }
+    auto bits = handler.receive();
+    if (bits != Bits::NO_PACKET) {
+      auto p = Packet(bits);
+      if (!p.multicast()) {
+        Serial.print("Received");
+        p.print_transmitter_and_button();
+        Serial.println(p.on_or_off() ? "①" : "⓪");
+        if (p.on_or_off()) {
+          if (transmitterButtonStorage.remember(p.transmitter_and_button())) {
+            tone(PIN_BUZZER, NOTE_E5, 50);
+            delay(80);
+            tone(PIN_BUZZER, NOTE_E6, 50);
+            delay(80);
+            tone(PIN_BUZZER, NOTE_A6, 80);
+          } else {
+            tone(PIN_BUZZER, NOTE_E6, 50);
+            delay(80);
+            tone(PIN_BUZZER, NOTE_E6, 50);
+          }
+        } else {
+          if (transmitterButtonStorage.forget(p.transmitter_and_button())) {
+            tone(PIN_BUZZER, NOTE_E5, 50);
+            delay(80);
+            tone(PIN_BUZZER, NOTE_A6, 50);
+            delay(80);
+            tone(PIN_BUZZER, NOTE_E6, 80);
+          } else {
+            tone(PIN_BUZZER, NOTE_A4, 50);
+            delay(80);
+            tone(PIN_BUZZER, NOTE_A4, 50);
+          }
+        }
+      }
     }
   }
   if (transmitterButtonStorage.store()) {
     transmitterButtonStorage.dump("Updated");
   }
+  tone(PIN_BUZZER, NOTE_A4, 120);
+  delay(120);
+  tone(PIN_BUZZER, NOTE_A5, 60);
   Serial.println("Ended learning");
 }
 
 void setup() {
   Serial.begin(115200);
   pinMode(PIN_DIGITAL_IN, INPUT);
+  pinMode(PIN_BUZZER, OUTPUT);
   pinMode(PIN_DIGITAL_OUT[0], OUTPUT);
   pinMode(PIN_DIGITAL_OUT[1], OUTPUT);
   pinMode(LED_BUILTIN, OUTPUT);
@@ -38,11 +79,12 @@ void setup() {
     handler.handleRise();
   }, RISING);
   while (!Serial); // wait for serial port to connect. Needed for native USB port only
+  delay(100); // avoid spurious beep
   initial_learning();
 }
 
 void loop() {
-  delay(3);
+  delay(10);
   auto bits = handler.receive();
   if (bits != Bits::NO_PACKET) {
     auto p = Packet(bits);

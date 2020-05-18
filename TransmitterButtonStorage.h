@@ -8,39 +8,6 @@ class TransmitterButtonStorage {
     int transmitter_button_count = 0;
     bool dirty = false;
 
-    void remember(unsigned long some_transmitter_button) {
-      if (!recognizes(Packet(some_transmitter_button))) {
-        if (transmitter_button_count == TRANSMITTER_BUTTONS_STORED) {
-          for (int i = 1; i < TRANSMITTER_BUTTONS_STORED; ++i) {
-            transmitter_buttons[i - 1] = transmitter_buttons[i];
-          }
-          transmitter_button_count -= 1;
-        }
-        transmitter_buttons[transmitter_button_count] = some_transmitter_button;
-        transmitter_button_count += 1;
-        dirty = true;
-      }
-    }
-
-    void forget(unsigned long some_transmitter_button) {
-      int old_index = 0;
-      int new_index = 0;
-      while (old_index < transmitter_button_count) {
-        if (transmitter_buttons[old_index] == some_transmitter_button) {
-          dirty = true;
-        } else {
-          transmitter_buttons[new_index] = transmitter_buttons[old_index];
-          ++new_index;
-        }
-        ++old_index;
-      }
-      transmitter_button_count = new_index;
-      while (new_index < TRANSMITTER_BUTTONS_STORED) {
-        transmitter_buttons[new_index] = ~0ul;
-        ++new_index;
-      }
-    }
-
   public:
     void load() {
       EEPROM.get(0, transmitter_buttons);
@@ -67,14 +34,39 @@ class TransmitterButtonStorage {
       return false;
     }
 
-    void learn(Packet packet) {
-      if (!packet.multicast()) {
-        if (packet.on_or_off()) {
-          remember(packet.transmitter_and_button());
-        } else {
-          forget(packet.transmitter_and_button());
+    bool remember(unsigned long some_transmitter_button) {
+      if (!recognizes(Packet(some_transmitter_button))) {
+        if (transmitter_button_count == TRANSMITTER_BUTTONS_STORED) {
+          for (int i = 1; i < TRANSMITTER_BUTTONS_STORED; ++i) {
+            transmitter_buttons[i - 1] = transmitter_buttons[i];
+          }
+          transmitter_button_count -= 1;
         }
+        transmitter_buttons[transmitter_button_count] = some_transmitter_button;
+        transmitter_button_count += 1;
+        dirty = true;
       }
+      return dirty;
+    }
+
+    bool forget(unsigned long some_transmitter_button) {
+      int old_index = 0;
+      int new_index = 0;
+      while (old_index < transmitter_button_count) {
+        if (transmitter_buttons[old_index] == some_transmitter_button) {
+          dirty = true;
+        } else {
+          transmitter_buttons[new_index] = transmitter_buttons[old_index];
+          ++new_index;
+        }
+        ++old_index;
+      }
+      transmitter_button_count = new_index;
+      while (new_index < TRANSMITTER_BUTTONS_STORED) {
+        transmitter_buttons[new_index] = ~0ul;
+        ++new_index;
+      }
+      return dirty;
     }
 
     bool store() {
