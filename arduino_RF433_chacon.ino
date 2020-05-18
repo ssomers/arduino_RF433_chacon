@@ -34,7 +34,9 @@ void setup() {
   pinMode(PIN_DIGITAL_OUT[0], OUTPUT);
   pinMode(PIN_DIGITAL_OUT[1], OUTPUT);
   pinMode(LED_BUILTIN, OUTPUT);
-  attachInterrupt(digitalPinToInterrupt(PIN_DIGITAL_IN), [](){handler.handleRise();}, RISING);
+  attachInterrupt(digitalPinToInterrupt(PIN_DIGITAL_IN), []() {
+    handler.handleRise();
+  }, RISING);
   while (!Serial); // wait for serial port to connect. Needed for native USB port only
   initial_learning();
 }
