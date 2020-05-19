@@ -45,9 +45,9 @@ class ProtocolHandler {
     }
 
     void packet_delimited() {
-      if (logEvents >= LogEvents::SOME && reception_stage > 0) {
+      if (logEvents > LogEvents::NONE && reception_stage > 0) {
         if (reception_stage != 32) {
-          if (reception_stage > 1 || logEvents >= LogEvents::ALL) {
+          if (reception_stage > 1 || logEvents == LogEvents::ALL) {
             Serial.print("Invalid vale count ");
             Serial.println(reception_stage);
           }
@@ -80,7 +80,7 @@ class ProtocolHandler {
         reception_stage = DELIMITED;
       } else if (reception_stage == DELIMITED) {
         if (duration < MIN_PACKET_PREAMBLE) {
-          if (logEvents >= LogEvents::ALL) {
+          if (logEvents == LogEvents::ALL) {
             Serial.print(duration);
             Serial.println("µs short preamble after delimiter");
           }
@@ -88,7 +88,7 @@ class ProtocolHandler {
           return;
         }
         if (duration > MAX_PACKET_PREAMBLE) {
-          if (logEvents >= LogEvents::ALL) {
+          if (logEvents == LogEvents::ALL) {
             Serial.print(duration);
             Serial.println("µs long preamble after delimiter");
           }
@@ -106,7 +106,7 @@ class ProtocolHandler {
         bits_received = 0;
       } else if (reception_stage >= OPENED) {
         if (duration < MIN_PEAK_SPACING) {
-          if (logEvents >= LogEvents::ALL) {
+          if (logEvents == LogEvents::ALL) {
             Serial.print(duration);
             Serial.print("µs peak in vale #");
             Serial.println(reception_stage);
@@ -118,7 +118,7 @@ class ProtocolHandler {
           ++extra_peaks_received;
         } else {
           if (duration <= MAX_VALE_SPACING) {
-            if (logEvents >= LogEvents::ALL) {
+            if (logEvents == LogEvents::ALL) {
               Serial.print(duration);
               Serial.print("µs vale after vale #");
               Serial.println(reception_stage);
@@ -128,7 +128,7 @@ class ProtocolHandler {
           }
           const int bit = 1 + int(bits_received & 1) - extra_peaks_received;
           if (bit < 0 || bit > 1) {
-            if (logEvents >= LogEvents::ALL) {
+            if (logEvents == LogEvents::ALL) {
               Serial.print("Invalid peak count ");
               Serial.println(1 + extra_peaks_received);
             }
@@ -187,7 +187,7 @@ class ProtocolHandler {
         if (train_handled != Bits::NO_PACKET && packet_complete > TRAIN_TIMEOUT) {
           abort_packet_train();
           interrupts();
-          if (logEvents >= LogEvents::SOME) {
+          if (logEvents > LogEvents::NONE) {
             Serial.println("Stop expecting rest of packet train");
           }
           return Bits::NO_PACKET;
