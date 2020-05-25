@@ -7,67 +7,103 @@ static const int PIN_BUZZER = 12;
 static const int LEVELS = 2;
 static const int PIN_DIGITAL_OUT[LEVELS] = { 3, 4 };
 static const unsigned INITIAL_LEARNING_MILLIS = 4000;
-
 static const LogEvents logEvents = LogEvents::NONE;
+
 static ProtocolHandler<logEvents> handler;
 static TransmitterButtonStorage transmitterButtonStorage;
 
+static void print_transmitter_and_button(Packet packet) {
+  Serial.print("Received transmitter ");
+  Serial.print(packet.transmitter(), HEX);
+  if (packet.multicast()) {
+    Serial.print(" all ");
+  } else {
+    Serial.print(" button ");
+    Serial.write('A' + packet.page());
+    Serial.print('1' + packet.row());
+  }
+}
+
+static void dump_transmitters_and_buttons(const char* prefix) {
+  transmitterButtonStorage.for_each([prefix](unsigned long transmitter_button) {
+    Serial.print(prefix);
+    print_transmitter_and_button(Packet(transmitter_button));
+    Serial.println();
+  });
+}
+
 static void initial_learning() {
-  const unsigned long boot_millis = millis();
+  unsigned long restart_millis = millis();
 
   transmitterButtonStorage.load();
   if (logEvents > LogEvents::NONE) {
-    transmitterButtonStorage.dump("Initial");
+    dump_transmitters_and_buttons("Initial");
     Serial.println("Start learning");
   }
-  unsigned long passed_millis;
-  unsigned long buzz_millis = boot_millis;
-  while ((passed_millis = millis()) < boot_millis + INITIAL_LEARNING_MILLIS) {
-    if (passed_millis >= buzz_millis) {
-      buzz_millis += 1000;
-      tone(PIN_BUZZER, NOTE_E4, 25);
-    }
-    auto bits = handler.receive();
-    if (bits != Bits::NO_PACKET) {
-      auto p = Packet(bits);
-      if (!p.multicast()) {
-        if (logEvents > LogEvents::NONE) {
-          Serial.print("Received");
-          p.print_transmitter_and_button();
-          Serial.println(p.on_or_off() ? "①" : "⓪");
-        }
-        if (p.on_or_off()) {
-          if (transmitterButtonStorage.remember(p.transmitter_and_button())) {
-            tone(PIN_BUZZER, NOTE_E5, 50);
-            delay(75);
-            tone(PIN_BUZZER, NOTE_E6, 50);
-            delay(75);
-            tone(PIN_BUZZER, NOTE_A6, 80);
-          } else {
-            tone(PIN_BUZZER, NOTE_E6, 50);
-            delay(75);
-            tone(PIN_BUZZER, NOTE_E6, 50);
-          }
-        } else {
-          if (transmitterButtonStorage.forget(p.transmitter_and_button())) {
-            tone(PIN_BUZZER, NOTE_E5, 50);
-            delay(75);
-            tone(PIN_BUZZER, NOTE_A6, 50);
-            delay(75);
-            tone(PIN_BUZZER, NOTE_E6, 75);
-          } else {
-            tone(PIN_BUZZER, NOTE_A4, 50);
-            delay(75);
-            tone(PIN_BUZZER, NOTE_A4, 50);
-          }
-        }
+  unsigned long buzz_millis = restart_millis;
+  for (;;) {
+    const auto passed_millis = millis();
+    if (passed_millis >= restart_millis + INITIAL_LEARNING_MILLIS) {
+      if (transmitterButtonStorage.count() != 0) {
+        break;
       }
     }
+    if (passed_millis >= buzz_millis) {
+      buzz_millis += 1000;
+      tone(PIN_BUZZER, NOTE_E4, 20);
+    }
+
+    const auto bits = handler.receive();
+    if (bits != Bits::NO_PACKET) {
+      const auto packet = Packet(bits);
+      bool change;
+      unsigned freq1;
+      unsigned freq2;
+      if (packet.multicast()) {
+        if (!packet.on_or_off()) {
+          if (logEvents > LogEvents::NONE) {
+            Serial.println("Received wipe");
+          }
+          transmitterButtonStorage.forget_all();
+          change = true;
+          freq1 = NOTE_A3;
+          freq2 = NOTE_E3;
+        }
+      } else {
+        if (logEvents > LogEvents::NONE) {
+          print_transmitter_and_button(packet);
+          Serial.println(packet.on_or_off() ? "①" : "⓪");
+        }
+        if (packet.on_or_off()) {
+          change = transmitterButtonStorage.remember(packet.transmitter_and_button());
+          freq1 = NOTE_E6;
+          freq2 = NOTE_A6;
+        } else {
+          change = transmitterButtonStorage.forget(packet.transmitter_and_button());
+          freq1 = NOTE_A4;
+          freq2 = NOTE_E4;
+        }
+      }
+      restart_millis = buzz_millis;
+      if (change) {
+        tone(PIN_BUZZER, NOTE_E5);
+        delay(75);
+        tone(PIN_BUZZER, freq1);
+        delay(75);
+        tone(PIN_BUZZER, freq2, 50);
+      } else {
+        tone(PIN_BUZZER, freq1, 50);
+        delay(75);
+        tone(PIN_BUZZER, freq1, 50);
+      }
+      delay(200);
+    }
   }
-  if (transmitterButtonStorage.store()) {
-    transmitterButtonStorage.dump("Updated");
-  }
-  tone(PIN_BUZZER, NOTE_A5, 75);
+  transmitterButtonStorage.store();
+  transmitterButtonStorage.for_each([](unsigned long) {
+    tone(PIN_BUZZER, NOTE_A5, 40);
+    delay(80);
+  });
   if (logEvents > LogEvents::NONE) {
     Serial.println("Ended learning");
   }
@@ -97,16 +133,15 @@ void loop() {
     const auto packet = Packet(bits);
     const bool recognized = transmitterButtonStorage.recognizes(packet);
     if (logEvents > LogEvents::NONE) {
-      Serial.print("Received");
-      packet.print_transmitter_and_button();
+      print_transmitter_and_button(packet);
       Serial.print(packet.on_or_off() ? "①" : "⓪");
       Serial.println(recognized ? ", hallelujah!" : ", never mind");
     }
-    tone(PIN_BUZZER, NOTE_E5);
-    delay(50);
-    tone(PIN_BUZZER, recognized ? NOTE_A6 : NOTE_A4, 50);
+    tone(PIN_BUZZER, NOTE_E5, 20);
     if (recognized) {
+      delay(40);
       if (packet.on_or_off()) {
+        tone(PIN_BUZZER, NOTE_A6, 60);
         for (int i = 0; i < LEVELS; ++i) {
           if (digitalRead(PIN_DIGITAL_OUT[i]) == LOW) {
             digitalWrite(PIN_DIGITAL_OUT[i], HIGH);
@@ -114,6 +149,7 @@ void loop() {
           }
         }
       } else {
+        tone(PIN_BUZZER, NOTE_E4, 60);
         for (int i = LEVELS - 1; i >= 0; --i) {
           if (digitalRead(PIN_DIGITAL_OUT[i]) == HIGH) {
             digitalWrite(PIN_DIGITAL_OUT[i], LOW);

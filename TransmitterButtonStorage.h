@@ -3,25 +3,28 @@
 
 class TransmitterButtonStorage {
     static const int TRANSMITTER_BUTTONS_STORED = 4;
+    static const unsigned long NONE = ~0ul;
 
     unsigned long transmitter_buttons[TRANSMITTER_BUTTONS_STORED];
     int transmitter_button_count = 0;
-    bool dirty = false;
 
   public:
     void load() {
       EEPROM.get(0, transmitter_buttons);
       while (transmitter_button_count < TRANSMITTER_BUTTONS_STORED &&
-             transmitter_buttons[transmitter_button_count] != ~0ul) {
+             transmitter_buttons[transmitter_button_count] != NONE) {
         ++transmitter_button_count;
       }
     }
 
-    void dump(const char* prefix) {
+    int count() const {
+      return transmitter_button_count;
+    }
+
+    template <typename F>
+    void for_each(F&& f) const {
       for (int i = 0; i < transmitter_button_count; ++i) {
-        Serial.print(prefix);
-        Packet(transmitter_buttons[i]).print_transmitter_and_button();
-        Serial.println();
+        f(transmitter_buttons[i]);
       }
     }
 
@@ -44,17 +47,19 @@ class TransmitterButtonStorage {
         }
         transmitter_buttons[transmitter_button_count] = some_transmitter_button;
         transmitter_button_count += 1;
-        dirty = true;
+        return true;
+      } else {
+        return false;
       }
-      return dirty;
     }
 
     bool forget(unsigned long some_transmitter_button) {
+      bool found = false;
       int old_index = 0;
       int new_index = 0;
       while (old_index < transmitter_button_count) {
         if (transmitter_buttons[old_index] == some_transmitter_button) {
-          dirty = true;
+          found = true;
         } else {
           transmitter_buttons[new_index] = transmitter_buttons[old_index];
           ++new_index;
@@ -63,19 +68,20 @@ class TransmitterButtonStorage {
       }
       transmitter_button_count = new_index;
       while (new_index < TRANSMITTER_BUTTONS_STORED) {
-        transmitter_buttons[new_index] = ~0ul;
+        transmitter_buttons[new_index] = NONE;
         ++new_index;
       }
-      return dirty;
+      return found;
     }
 
-    bool store() {
-      if (dirty) {
-        EEPROM.put(0, transmitter_buttons);
-        dirty = false;
-        return true;
-      } else {
-        return false;
+    void forget_all() {
+      while (transmitter_button_count > 0) {
+        transmitter_button_count -= 1;
+        transmitter_buttons[transmitter_button_count] = NONE;
       }
+    }
+
+    void store() {
+      EEPROM.put(0, transmitter_buttons);
     }
 };

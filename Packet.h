@@ -35,16 +35,4 @@ class Packet {
     unsigned row() const {
       return bits & 3;
     }
-
-    void print_transmitter_and_button() const {
-      Serial.print(" transmitter ");
-      Serial.print(transmitter(), HEX);
-      if (multicast()) {
-        Serial.print(" all ");
-      } else {
-        Serial.print(" button ");
-        Serial.write('A' + page());
-        Serial.print(row() + 1);
-      }
-    }
 };
