@@ -28,11 +28,11 @@ class Packet {
       return (bits >> 4) & 1;
     }
 
-    unsigned page() const {
+    byte page() const {
       return (bits >> 2) & 3;
     }
 
-    unsigned row() const {
+    byte row() const {
       return bits & 3;
     }
 };

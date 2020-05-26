@@ -2,11 +2,11 @@
 #include "Packet.h"
 
 class TransmitterButtonStorage {
-    static const int TRANSMITTER_BUTTONS_STORED = 4;
+    static const byte TRANSMITTER_BUTTONS_STORED = 4;
     static const unsigned long NONE = ~0ul;
 
     unsigned long transmitter_buttons[TRANSMITTER_BUTTONS_STORED];
-    int transmitter_button_count = 0;
+    byte transmitter_button_count = 0;
 
   public:
     void load() {
@@ -17,19 +17,19 @@ class TransmitterButtonStorage {
       }
     }
 
-    int count() const {
+    byte count() const {
       return transmitter_button_count;
     }
 
     template <typename F>
     void for_each(F&& f) const {
-      for (int i = 0; i < transmitter_button_count; ++i) {
+      for (byte i = 0; i < transmitter_button_count; ++i) {
         f(transmitter_buttons[i]);
       }
     }
 
     bool recognizes(Packet packet) const {
-      for (int i = 0; i < transmitter_button_count; ++i) {
+      for (byte i = 0; i < transmitter_button_count; ++i) {
         if (packet.matches(transmitter_buttons[i])) {
           return true;
         }
@@ -40,7 +40,7 @@ class TransmitterButtonStorage {
     bool remember(unsigned long some_transmitter_button) {
       if (!recognizes(Packet(some_transmitter_button))) {
         if (transmitter_button_count == TRANSMITTER_BUTTONS_STORED) {
-          for (int i = 1; i < TRANSMITTER_BUTTONS_STORED; ++i) {
+          for (byte i = 1; i < TRANSMITTER_BUTTONS_STORED; ++i) {
             transmitter_buttons[i - 1] = transmitter_buttons[i];
           }
           transmitter_button_count -= 1;
@@ -55,8 +55,8 @@ class TransmitterButtonStorage {
 
     bool forget(unsigned long some_transmitter_button) {
       bool found = false;
-      int old_index = 0;
-      int new_index = 0;
+      byte old_index = 0;
+      byte new_index = 0;
       while (old_index < transmitter_button_count) {
         if (transmitter_buttons[old_index] == some_transmitter_button) {
           found = true;

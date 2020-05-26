@@ -7,21 +7,22 @@ enum Bits : unsigned long { NO_PACKET = ~0ul };
 
 template <LogEvents logEvents>
 class ProtocolHandler {
-    static const unsigned long MIN_PEAK_SPACING = 500;
-    static const unsigned long MAX_PEAK_SPACING = 600;
-    static const unsigned long MAX_VALE_SPACING = 1500;
-    static const unsigned long MIN_PACKET_SPACING = 10000;
-    static const unsigned long MAX_PACKET_SPACING = 11000;
-    static const unsigned long MIN_PACKET_PREAMBLE = 2800;
+    static const unsigned long MIN_PEAK_SPACING = 416;
+    static const unsigned long MAX_PEAK_SPACING = 608;
+    static const unsigned long MIN_VALE_SPACING = 1488;
+    static const unsigned long NOM_VALE_SPACING = 1632;
+    static const unsigned long MIN_PACKET_SPACING = 9984;
+    static const unsigned long MAX_PACKET_SPACING = 11008;
+    static const unsigned long MIN_PACKET_PREAMBLE = 2720;
     static const unsigned long MAX_PACKET_PREAMBLE = 3200;
     static const unsigned long PARITY_TIMEOUT = 3ul * MAX_PEAK_SPACING;
-    static const unsigned long MAX_PAYLOAD = 32ul * (MAX_VALE_SPACING + MAX_PEAK_SPACING);
+    static const unsigned long MAX_PAYLOAD = 32ul * (NOM_VALE_SPACING + MAX_PEAK_SPACING);
     static const unsigned long TRAIN_TIMEOUT = 3 * MAX_PACKET_SPACING + 4 * (MAX_PACKET_PREAMBLE + MAX_PAYLOAD);
 
     unsigned long last_rise_micros = micros();
-    enum { IDLE = -2, DELIMITED = -1, OPENED = 0, FINISHED = 32 };
-    int reception_stage;
-    int extra_peaks_received;
+    enum { IDLE = 0xFF, DELIMITED = 0XFE, OPENED = 0, FINISHED = 32 };
+    byte reception_stage;
+    byte extra_peaks_received;
     unsigned long bits_received;
     unsigned long packet_complete_micros;
     unsigned long train_handled = Bits::NO_PACKET;
@@ -45,13 +46,13 @@ class ProtocolHandler {
     }
 
     void packet_delimited() {
-      if (logEvents > LogEvents::NONE && reception_stage > 0) {
-        if (reception_stage != 32) {
+      if (logEvents > LogEvents::NONE && reception_stage > OPENED && reception_stage < DELIMITED) {
+        if (reception_stage != FINISHED) {
           if (reception_stage > 1 || logEvents == LogEvents::ALL) {
             Serial.print("Invalid vale count ");
             Serial.println(reception_stage);
           }
-        } else if (extra_peaks_received != int(bits_received & 1)) {
+        } else if (extra_peaks_received != (bits_received & 1)) {
           Serial.print("Invalid final peak count ");
           Serial.println(1 + extra_peaks_received);
         } else if (train_handled == Bits::NO_PACKET) {
@@ -73,11 +74,13 @@ class ProtocolHandler {
 
       if (duration >= MIN_PACKET_SPACING) {
         packet_delimited();
-#     if MEASUREMENT
+#      if MEASUREMENT
         delimiter_micros = duration;
         times[0] = now;
-#     endif
+#      endif
         reception_stage = DELIMITED;
+      } else if (reception_stage == IDLE) {
+        // wait for delimiter
       } else if (reception_stage == DELIMITED) {
         if (duration < MIN_PACKET_PREAMBLE) {
           if (logEvents == LogEvents::ALL) {
@@ -97,14 +100,14 @@ class ProtocolHandler {
         }
         if (train_handled == Bits::NO_PACKET) {
           digitalWrite(LED_BUILTIN, HIGH);
-#       if MEASUREMENT
+#        if MEASUREMENT
           times[1] = now;
-#       endif
+#        endif
         }
         reception_stage = OPENED;
         extra_peaks_received = 0;
         bits_received = 0;
-      } else if (reception_stage >= OPENED) {
+      } else {
         if (duration < MIN_PEAK_SPACING) {
           if (logEvents == LogEvents::ALL) {
             Serial.print(duration);
@@ -117,7 +120,7 @@ class ProtocolHandler {
         if (duration <= MAX_PEAK_SPACING) {
           ++extra_peaks_received;
         } else {
-          if (duration <= MAX_VALE_SPACING) {
+          if (duration < MIN_VALE_SPACING) {
             if (logEvents == LogEvents::ALL) {
               Serial.print(duration);
               Serial.print("µs vale after vale #");
@@ -126,8 +129,8 @@ class ProtocolHandler {
             cancel_packet();
             return;
           }
-          const int bit = 1 + int(bits_received & 1) - extra_peaks_received;
-          if (bit < 0 || bit > 1) {
+          const byte bit = 1 + (bits_received & 1) - extra_peaks_received;
+          if (bit > 1) {
             if (logEvents == LogEvents::ALL) {
               Serial.print("Invalid peak count ");
               Serial.println(1 + extra_peaks_received);
@@ -168,7 +171,7 @@ class ProtocolHandler {
           Serial.print("After ");
           Serial.print(delimiter_micros);
           Serial.println("µs delimiter");
-          for (int i = 1; i < FINISHED + 2; ++i) {
+          for (byte i = 1; i < FINISHED + 2; ++i) {
             Serial.print("  ");
             Serial.print(times[i]);
             Serial.print(" start of bit ");

@@ -2,32 +2,32 @@
 #include "ProtocolHandler.h"
 #include "TransmitterButtonStorage.h"
 
-static const int PIN_DIGITAL_IN = 2;
-static const int PIN_BUZZER = 12;
-static const int LEVELS = 2;
-static const int PIN_DIGITAL_OUT[LEVELS] = { 3, 4 };
-static const unsigned INITIAL_LEARNING_MILLIS = 4000;
+static const byte PIN_DIGITAL_IN = 2;
+static const byte PIN_BUZZER = 12;
+static const byte LEVELS = 2;
+static const byte PIN_DIGITAL_OUT[LEVELS] = { 3, 4 };
+static const unsigned long INITIAL_LEARNING_MILLIS = 4000;
 static const LogEvents logEvents = LogEvents::NONE;
 
 static ProtocolHandler<logEvents> handler;
 static TransmitterButtonStorage transmitterButtonStorage;
 
-static void print_transmitter_and_button(Packet packet) {
-  Serial.print("Received transmitter ");
+static void print_transmitter_and_button(const char* prefix, Packet packet) {
+  Serial.print(prefix);
+  Serial.print(" transmitter ");
   Serial.print(packet.transmitter(), HEX);
   if (packet.multicast()) {
     Serial.print(" all ");
   } else {
     Serial.print(" button ");
     Serial.write('A' + packet.page());
-    Serial.print('1' + packet.row());
+    Serial.write('1' + packet.row());
   }
 }
 
 static void dump_transmitters_and_buttons(const char* prefix) {
   transmitterButtonStorage.for_each([prefix](unsigned long transmitter_button) {
-    Serial.print(prefix);
-    print_transmitter_and_button(Packet(transmitter_button));
+    print_transmitter_and_button(prefix, Packet(transmitter_button));
     Serial.println();
   });
 }
@@ -57,21 +57,21 @@ static void initial_learning() {
     if (bits != Bits::NO_PACKET) {
       const auto packet = Packet(bits);
       bool change;
-      unsigned freq1;
-      unsigned freq2;
+      unsigned int freq1;
+      unsigned int freq2;
       if (packet.multicast()) {
-        if (!packet.on_or_off()) {
+        change = !packet.on_or_off();
+        freq1 = NOTE_A3;
+        freq2 = NOTE_E3;
+        if (change) {
           if (logEvents > LogEvents::NONE) {
             Serial.println("Received wipe");
           }
           transmitterButtonStorage.forget_all();
-          change = true;
-          freq1 = NOTE_A3;
-          freq2 = NOTE_E3;
         }
       } else {
         if (logEvents > LogEvents::NONE) {
-          print_transmitter_and_button(packet);
+          print_transmitter_and_button("Received", packet);
           Serial.println(packet.on_or_off() ? "①" : "⓪");
         }
         if (packet.on_or_off()) {
@@ -133,7 +133,7 @@ void loop() {
     const auto packet = Packet(bits);
     const bool recognized = transmitterButtonStorage.recognizes(packet);
     if (logEvents > LogEvents::NONE) {
-      print_transmitter_and_button(packet);
+      print_transmitter_and_button("Received", packet);
       Serial.print(packet.on_or_off() ? "①" : "⓪");
       Serial.println(recognized ? ", hallelujah!" : ", never mind");
     }
@@ -142,7 +142,7 @@ void loop() {
       delay(40);
       if (packet.on_or_off()) {
         tone(PIN_BUZZER, NOTE_A6, 60);
-        for (int i = 0; i < LEVELS; ++i) {
+        for (byte i = 0; i < LEVELS; ++i) {
           if (digitalRead(PIN_DIGITAL_OUT[i]) == LOW) {
             digitalWrite(PIN_DIGITAL_OUT[i], HIGH);
             break;
@@ -150,9 +150,9 @@ void loop() {
         }
       } else {
         tone(PIN_BUZZER, NOTE_E4, 60);
-        for (int i = LEVELS - 1; i >= 0; --i) {
-          if (digitalRead(PIN_DIGITAL_OUT[i]) == HIGH) {
-            digitalWrite(PIN_DIGITAL_OUT[i], LOW);
+        for (byte i = LEVELS; i > 0; --i) {
+          if (digitalRead(PIN_DIGITAL_OUT[i - 1]) == HIGH) {
+            digitalWrite(PIN_DIGITAL_OUT[i - 1], LOW);
             break;
           }
         }
