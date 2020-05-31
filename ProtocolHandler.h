@@ -1,9 +1,8 @@
 #define MEASUREMENT 0
 
-enum LogEvents { NO_LOG, SOME_LOG, FULL_LOG };
 static const unsigned long VOID_BITS = ~0ul;
 
-template <LogEvents logEvents>
+template <typename MajorEventLogger, typename MinorEventLogger>
 class ProtocolHandler {
     static const unsigned long MIN_PEAK_SPACING = 416;
     static const unsigned long MAX_PEAK_SPACING = 608;
@@ -12,7 +11,7 @@ class ProtocolHandler {
     static const unsigned long MIN_PACKET_PREAMBLE = 2720;
     static const unsigned long MAX_PACKET_PREAMBLE = 3200;
     static const unsigned long PARITY_TIMEOUT = 3ul * MAX_PEAK_SPACING;
-    static const unsigned long TRAIN_TIMEOUT = 1ul << 18;
+    static const unsigned long TRAIN_TIMEOUT = 0x30000;
 
     unsigned long last_rise_micros = micros();
     enum { IDLE = 0xFF, DELIMITED = 0XFE, OPENED = 0, FINISHED = 32 };
@@ -36,22 +35,22 @@ class ProtocolHandler {
     }
 
     void packet_delimited() {
-      if (logEvents > NO_LOG && reception_stage > OPENED && reception_stage < DELIMITED) {
+      if (reception_stage > OPENED && reception_stage < DELIMITED) {
         if (reception_stage != FINISHED) {
-          if (reception_stage > 1 || logEvents == FULL_LOG) {
-            Serial.print("Invalid vale count ");
-            Serial.println(reception_stage);
+          if (reception_stage > 1) {
+            MinorEventLogger::print("Invalid vale count ");
+            MinorEventLogger::println(reception_stage);
           }
         } else if (extra_peaks_received != (bits_received & 1)) {
-          Serial.print("Invalid final peak count ");
-          Serial.println(1 + extra_peaks_received);
+          MajorEventLogger::print("Invalid final peak count ");
+          MajorEventLogger::println(1 + extra_peaks_received);
         } else if (train_handled == VOID_BITS) {
-          Serial.println("Packet received but missed by main loop");
+          MajorEventLogger::println("Packet received but missed by main loop");
         } else if (train_handled != bits_received) {
-          Serial.print(train_handled, BIN);
-          Serial.println(" received, but then");
-          Serial.print(bits_received, BIN);
-          Serial.println(" received!");
+          MajorEventLogger::print(train_handled, BIN);
+          MajorEventLogger::println(" received, but then");
+          MajorEventLogger::print(bits_received, BIN);
+          MajorEventLogger::println(" received!");
         }
       }
     }
@@ -73,18 +72,14 @@ class ProtocolHandler {
         // wait for delimiter
       } else if (reception_stage == DELIMITED) {
         if (duration < MIN_PACKET_PREAMBLE) {
-          if (logEvents == FULL_LOG) {
-            Serial.print(duration);
-            Serial.println("µs short preamble after delimiter");
-          }
+          MinorEventLogger::print(duration);
+          MinorEventLogger::println("µs short preamble after delimiter");
           cancel_packet();
           return;
         }
         if (duration > MAX_PACKET_PREAMBLE) {
-          if (logEvents == FULL_LOG) {
-            Serial.print(duration);
-            Serial.println("µs long preamble after delimiter");
-          }
+          MinorEventLogger::print(duration);
+          MinorEventLogger::println("µs long preamble after delimiter");
           cancel_packet();
           return;
         }
@@ -98,11 +93,9 @@ class ProtocolHandler {
         bits_received = 0;
       } else {
         if (duration < MIN_PEAK_SPACING) {
-          if (logEvents == FULL_LOG) {
-            Serial.print(duration);
-            Serial.print("µs peak in vale #");
-            Serial.println(reception_stage);
-          }
+          MinorEventLogger::print(duration);
+          MinorEventLogger::print("µs peak in vale #");
+          MinorEventLogger::println(reception_stage);
           cancel_packet();
           return;
         }
@@ -110,20 +103,16 @@ class ProtocolHandler {
           ++extra_peaks_received;
         } else {
           if (duration < MIN_VALE_SPACING) {
-            if (logEvents == FULL_LOG) {
-              Serial.print(duration);
-              Serial.print("µs vale after vale #");
-              Serial.println(reception_stage);
-            }
+            MinorEventLogger::print(duration);
+            MinorEventLogger::print("µs vale after vale #");
+            MinorEventLogger::println(reception_stage);
             cancel_packet();
             return;
           }
           const byte bit = 1 + (bits_received & 1) - extra_peaks_received;
           if (bit > 1) {
-            if (logEvents == FULL_LOG) {
-              Serial.print("Invalid peak count ");
-              Serial.println(1 + extra_peaks_received);
-            }
+            MinorEventLogger::print("Invalid peak count ");
+            MinorEventLogger::println(1 + extra_peaks_received);
             cancel_packet();
             return;
           }
@@ -178,9 +167,7 @@ class ProtocolHandler {
           } else if (packet_complete > TRAIN_TIMEOUT) {
             abort_packet_train();
             interrupts();
-            if (logEvents > NO_LOG) {
-              Serial.println("Stop expecting rest of packet train");
-            }
+            MinorEventLogger::println("Stop expecting rest of packet train");
             return VOID_BITS;
           }
         }

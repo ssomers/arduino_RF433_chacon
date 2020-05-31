@@ -2,16 +2,20 @@
 #include "ProtocolHandler.h"
 #include "TransmitterButtonStorage.h"
 
-static const byte LEVELS = 2;
-static const byte PIN_DIGITAL_OUT[LEVELS] = { 3, 4 };
-static const unsigned long INITIAL_LEARNING_MILLIS = 4000;
+enum LogEvents { NO_LOG, SOME_LOG, FULL_LOG };
 static const LogEvents logEvents = NO_LOG;
+
+static const byte PIN_DIGITAL_OUT_POWER = 3;
+static const byte PIN_DIGITAL_OUT_SPEED = 4;
+static const unsigned long INITIAL_LEARNING_MILLIS = 4000;
+static const unsigned long LOOP_MILLIS = 5;
+static const byte LOOPS_PER_BOOST = 200;
 
 #ifdef LED_BUILTIN
 /*
-#define Q(V) #V
-#define QV(V) Q(V)
-#pragma message "\nLED_BUILTIN = " QV(LED_BUILTIN) ";"
+  #define Q(V) #V
+  #define QV(V) Q(V)
+  #pragma message "\nLED_BUILTIN = " QV(LED_BUILTIN) ";"
 */
 static const byte PIN_BUZZER = LED_BUILTIN;
 static const byte PIN_DIGITAL_IN = 2;
@@ -22,7 +26,33 @@ static const byte PIN_DIGITAL_IN = 2;
 static const int INT_IN = 0;
 #endif
 
-static ProtocolHandler<logEvents> handler;
+struct QuietEventLogger {
+  template <typename T>  static void print(T) {}
+  template <typename T, typename F> static void print(T, F) {}
+  template <typename T>  static void println(T) {}
+};
+
+struct BuzzingEventLogger {
+  template <typename T> static void print(T) {}
+  template <typename T, typename F> static void print(T, F) {}
+  template <typename T> static void println(T) {
+    tone(PIN_BUZZER, NOTE_E3, 30);
+  }
+};
+
+struct SerialEventLogger {
+  template <typename T> static void print(T t) {
+    Serial.print(t);
+  }
+  template <typename T, typename F> static void print(T t, F f) {
+    Serial.print(t, f);
+  }
+  template <typename T> static void println(T t) {
+    Serial.println(t);
+  }
+};
+
+static ProtocolHandler<BuzzingEventLogger, QuietEventLogger> handler;
 static TransmitterButtonStorage transmitterButtonStorage;
 
 static void print_transmitter_and_button(const char* prefix, Packet packet) {
@@ -128,17 +158,27 @@ void setup() {
   }
   pinMode(PIN_DIGITAL_IN, INPUT);
   pinMode(PIN_BUZZER, OUTPUT);
-  pinMode(PIN_DIGITAL_OUT[0], OUTPUT);
-  pinMode(PIN_DIGITAL_OUT[1], OUTPUT);
+  pinMode(PIN_DIGITAL_OUT_POWER, OUTPUT);
+  pinMode(PIN_DIGITAL_OUT_SPEED, OUTPUT);
   attachInterrupt(INT_IN, []() {
     handler.handleRise();
   }, RISING);
+#ifdef LED_BUILTIN
   delay(100); // avoid spurious beep
+#endif
   initial_learning();
 }
 
 void loop() {
-  delay(10); // save energy?
+  delay(LOOP_MILLIS); // save energy & provide timer
+
+  static byte boost_iterations = 0;
+  if (boost_iterations > 0) {
+    if (--boost_iterations == 0) {
+      digitalWrite(PIN_DIGITAL_OUT_SPEED, LOW);
+    }
+  }
+
   const unsigned long bits = handler.receive();
   if (bits != VOID_BITS) {
     const Packet packet(bits);
@@ -150,24 +190,23 @@ void loop() {
     }
     tone(PIN_BUZZER, NOTE_E5, 20);
     if (recognized) {
-      delay(40);
       if (packet.on_or_off()) {
-        tone(PIN_BUZZER, NOTE_A6, 60);
-        for (byte i = 0; i < LEVELS; ++i) {
-          if (digitalRead(PIN_DIGITAL_OUT[i]) == LOW) {
-            digitalWrite(PIN_DIGITAL_OUT[i], HIGH);
-            break;
-          }
+        if (boost_iterations > 0) {
+          boost_iterations = 0;
+        } else if (digitalRead(PIN_DIGITAL_OUT_POWER) == LOW) {
+          boost_iterations = LOOPS_PER_BOOST;
         }
+        digitalWrite(PIN_DIGITAL_OUT_SPEED, HIGH);
+        digitalWrite(PIN_DIGITAL_OUT_POWER, HIGH);
       } else {
-        tone(PIN_BUZZER, NOTE_E4, 60);
-        for (byte i = LEVELS; i > 0; --i) {
-          if (digitalRead(PIN_DIGITAL_OUT[i - 1]) == HIGH) {
-            digitalWrite(PIN_DIGITAL_OUT[i - 1], LOW);
-            break;
-          }
+        if (boost_iterations > 0 || digitalRead(PIN_DIGITAL_OUT_SPEED) == LOW) {
+          digitalWrite(PIN_DIGITAL_OUT_POWER, LOW);
         }
+        digitalWrite(PIN_DIGITAL_OUT_SPEED, LOW);
+        boost_iterations = 0;
       }
+      delay(40);
+      tone(PIN_BUZZER, packet.on_or_off() ? NOTE_A6 : NOTE_E4, 60);
     }
   }
 }
