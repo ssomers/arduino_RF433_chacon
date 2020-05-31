@@ -1,4 +1,4 @@
-#include <EEPROM.h>
+#include <avr/eeprom.h>
 #include "Packet.h"
 
 class TransmitterButtonStorage {
@@ -10,10 +10,14 @@ class TransmitterButtonStorage {
 
   public:
     void load() {
-      EEPROM.get(0, transmitter_buttons);
-      while (transmitter_button_count < TRANSMITTER_BUTTONS_STORED &&
-             transmitter_buttons[transmitter_button_count] != NONE) {
-        ++transmitter_button_count;
+      unsigned long* const address = 0;
+      for (transmitter_button_count = 0;
+           transmitter_button_count < TRANSMITTER_BUTTONS_STORED;
+           transmitter_button_count++) {
+        unsigned long tb = transmitter_buttons[transmitter_button_count] = eeprom_read_dword(&address[transmitter_button_count]);
+        if (tb == NONE) {
+          break;
+        }
       }
     }
 
@@ -21,11 +25,8 @@ class TransmitterButtonStorage {
       return transmitter_button_count;
     }
 
-    template <typename F>
-    void for_each(F&& f) const {
-      for (byte i = 0; i < transmitter_button_count; ++i) {
-        f(transmitter_buttons[i]);
-      }
+    unsigned long get(byte index) const {
+      return transmitter_buttons[index];
     }
 
     bool recognizes(Packet packet) const {
@@ -82,6 +83,9 @@ class TransmitterButtonStorage {
     }
 
     void store() {
-      EEPROM.put(0, transmitter_buttons);
+      unsigned long* const address = 0;
+      for (byte i = 0; i < transmitter_button_count; ++i) {
+        eeprom_update_dword(&address[i], transmitter_buttons[i]);
+      }
     }
 };
