@@ -5,10 +5,11 @@
 enum LogEvents { NO_LOG, SOME_LOG, FULL_LOG };
 static const LogEvents logEvents = NO_LOG;
 
+static const byte PIN_DIGITAL_IN = 2;
 static const byte PIN_DIGITAL_OUT_POWER = 3;
 static const byte PIN_DIGITAL_OUT_SPEED = 4;
 static const unsigned long INITIAL_LEARNING_MILLIS = 4000;
-static const unsigned long LOOP_MILLIS = 5;
+static const unsigned long LOOP_MILLIS = 4;
 static const byte LOOPS_PER_BOOST = 200;
 
 #ifdef LED_BUILTIN
@@ -17,30 +18,35 @@ static const byte LOOPS_PER_BOOST = 200;
   #define QV(V) Q(V)
   #pragma message "\nLED_BUILTIN = " QV(LED_BUILTIN) ";"
 */
-static const byte PIN_BUZZER = LED_BUILTIN;
-static const byte PIN_DIGITAL_IN = 2;
+static const byte PIN_BUZZER = 12;
 static const int INT_IN = digitalPinToInterrupt(PIN_DIGITAL_IN);
 #else
-static const byte PIN_BUZZER = 1;
-static const byte PIN_DIGITAL_IN = 2;
+static const byte PIN_BUZZER = 0;
+static const byte LED_BUILTIN = 1;
 static const int INT_IN = 0;
 #endif
 
 struct QuietEventLogger {
+  static void announce(byte) {}
   template <typename T>  static void print(T) {}
   template <typename T, typename F> static void print(T, F) {}
   template <typename T>  static void println(T) {}
 };
 
 struct BuzzingEventLogger {
+  static void announce(byte b) {
+    if (b == 9) {
+      tone(PIN_BUZZER, NOTE_E3 - b * 15, 10);
+      delay(11);
+    }
+  }
   template <typename T> static void print(T) {}
   template <typename T, typename F> static void print(T, F) {}
-  template <typename T> static void println(T) {
-    tone(PIN_BUZZER, NOTE_E3, 30);
-  }
+  template <typename T> static void println(T) {}
 };
 
 struct SerialEventLogger {
+  static void announce(byte) {}
   template <typename T> static void print(T t) {
     Serial.print(t);
   }
@@ -157,6 +163,7 @@ void setup() {
     Serial.begin(115200);
   }
   pinMode(PIN_DIGITAL_IN, INPUT);
+  pinMode(LED_BUILTIN, OUTPUT);
   pinMode(PIN_BUZZER, OUTPUT);
   pinMode(PIN_DIGITAL_OUT_POWER, OUTPUT);
   pinMode(PIN_DIGITAL_OUT_SPEED, OUTPUT);
@@ -171,6 +178,22 @@ void setup() {
 
 void loop() {
   delay(LOOP_MILLIS); // save energy & provide timer
+
+  static byte alive_iterations = 0;
+  switch (++alive_iterations) {
+    case 200:
+      if (handler.is_alive()) digitalWrite(LED_BUILTIN, HIGH);
+      break;
+    case 204:
+      digitalWrite(LED_BUILTIN, LOW);
+      break;
+    case 240:
+      digitalWrite(LED_BUILTIN, HIGH);
+      break;
+    case 244:
+      digitalWrite(LED_BUILTIN, LOW);
+      alive_iterations = 0;
+  }
 
   static byte boost_iterations = 0;
   if (boost_iterations > 0) {

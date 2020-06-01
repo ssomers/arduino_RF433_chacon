@@ -15,6 +15,7 @@ class ProtocolHandler {
 
     unsigned long last_rise_micros = micros();
     enum { IDLE = 0xFF, DELIMITED = 0XFE, OPENED = 0, FINISHED = 32 };
+    unsigned rises = 0;
     byte reception_stage;
     byte extra_peaks_received;
     unsigned long bits_received;
@@ -38,15 +39,19 @@ class ProtocolHandler {
       if (reception_stage > OPENED && reception_stage < DELIMITED) {
         if (reception_stage != FINISHED) {
           if (reception_stage > 1) {
+            MinorEventLogger::announce(0);
             MinorEventLogger::print("Invalid vale count ");
             MinorEventLogger::println(reception_stage);
           }
         } else if (extra_peaks_received != (bits_received & 1)) {
+          MajorEventLogger::announce(1);
           MajorEventLogger::print("Invalid final peak count ");
           MajorEventLogger::println(1 + extra_peaks_received);
         } else if (train_handled == VOID_BITS) {
+          MajorEventLogger::announce(2);
           MajorEventLogger::println("Packet received but missed by main loop");
         } else if (train_handled != bits_received) {
+          MajorEventLogger::announce(3);
           MajorEventLogger::print(train_handled, BIN);
           MajorEventLogger::println(" received, but then");
           MajorEventLogger::print(bits_received, BIN);
@@ -57,6 +62,7 @@ class ProtocolHandler {
 
   public:
     void handleRise() {
+      ++rises;
       const unsigned long now = micros();
       const unsigned long duration = now - last_rise_micros;
       last_rise_micros = now;
@@ -72,12 +78,14 @@ class ProtocolHandler {
         // wait for delimiter
       } else if (reception_stage == DELIMITED) {
         if (duration < MIN_PACKET_PREAMBLE) {
+          MinorEventLogger::announce(4);
           MinorEventLogger::print(duration);
           MinorEventLogger::println("µs short preamble after delimiter");
           cancel_packet();
           return;
         }
         if (duration > MAX_PACKET_PREAMBLE) {
+          MinorEventLogger::announce(5);
           MinorEventLogger::print(duration);
           MinorEventLogger::println("µs long preamble after delimiter");
           cancel_packet();
@@ -91,43 +99,61 @@ class ProtocolHandler {
         reception_stage = OPENED;
         extra_peaks_received = 0;
         bits_received = 0;
-      } else {
+      } else if (duration < MIN_VALE_SPACING) {
         if (duration < MIN_PEAK_SPACING) {
+          MinorEventLogger::announce(6);
           MinorEventLogger::print(duration);
           MinorEventLogger::print("µs peak in vale #");
           MinorEventLogger::println(reception_stage);
           cancel_packet();
           return;
         }
-        if (duration <= MAX_PEAK_SPACING) {
-          ++extra_peaks_received;
-        } else {
-          if (duration < MIN_VALE_SPACING) {
-            MinorEventLogger::print(duration);
-            MinorEventLogger::print("µs vale after vale #");
-            MinorEventLogger::println(reception_stage);
-            cancel_packet();
-            return;
-          }
-          const byte bit = 1 + (bits_received & 1) - extra_peaks_received;
-          if (bit > 1) {
-            MinorEventLogger::print("Invalid peak count ");
-            MinorEventLogger::println(1 + extra_peaks_received);
-            cancel_packet();
-            return;
-          }
-          bits_received = (bits_received << 1) | bit;
-          extra_peaks_received = 0;
-          ++reception_stage;
-#        if MEASUREMENT
-          if (reception_stage <= FINISHED) {
-            times[1 + reception_stage] = now;
-          }
-#        endif
-          if (reception_stage == FINISHED && train_handled == VOID_BITS) {
-            packet_complete_micros = now + PARITY_TIMEOUT;
-          }
+        if (duration > MAX_PEAK_SPACING) {
+          MinorEventLogger::announce(7);
+          MinorEventLogger::print(duration);
+          MinorEventLogger::print("µs vale after vale #");
+          MinorEventLogger::println(reception_stage);
+          cancel_packet();
+          return;
         }
+        ++extra_peaks_received;
+      } else {
+        const byte bit = 1 + (bits_received & 1) - extra_peaks_received;
+        if (bit > 1) {
+          if (reception_stage > 1) {
+            if (bit & 0x80) {
+              MinorEventLogger::announce(8);
+              MinorEventLogger::print("Too many peaks ");
+            } else {
+              MinorEventLogger::announce(9);
+              MinorEventLogger::print("Too few peaks ");
+            }
+            MinorEventLogger::println(1 + extra_peaks_received);
+          }
+          cancel_packet();
+          return;
+        }
+        bits_received = (bits_received << 1) | bit;
+        extra_peaks_received = 0;
+        ++reception_stage;
+#      if MEASUREMENT
+        if (reception_stage <= FINISHED) {
+          times[1 + reception_stage] = now;
+        }
+#      endif
+        if (reception_stage == FINISHED && train_handled == VOID_BITS) {
+          packet_complete_micros = now + PARITY_TIMEOUT;
+        }
+      }
+    }
+
+    bool is_alive() const {
+      static unsigned last_rises = 0;
+      if (last_rises != rises) {
+        last_rises = rises;
+        return true;
+      } else {
+        return false;
       }
     }
 
@@ -167,6 +193,7 @@ class ProtocolHandler {
           } else if (packet_complete > TRAIN_TIMEOUT) {
             abort_packet_train();
             interrupts();
+            MinorEventLogger::announce(10);
             MinorEventLogger::println("Stop expecting rest of packet train");
             return VOID_BITS;
           }
