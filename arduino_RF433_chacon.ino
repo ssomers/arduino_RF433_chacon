@@ -2,8 +2,9 @@
 #include "ProtocolHandler.h"
 #include "TransmitterButtonStorage.h"
 
-enum LogEvents { NO_LOG, SOME_LOG, FULL_LOG };
-static const LogEvents logEvents = NO_LOG;
+static const bool logEvents = false;
+static const bool logTiming = false;
+static const Notice MAX_NOTICE = EXCESS_PEAKS;
 
 static const byte PIN_DIGITAL_IN = 2;
 static const byte PIN_DIGITAL_OUT_POWER = 3;
@@ -18,7 +19,7 @@ static const byte LOOPS_PER_BOOST = 200;
   #define QV(V) Q(V)
   #pragma message "\nLED_BUILTIN = " QV(LED_BUILTIN) ";"
 */
-static const byte PIN_BUZZER = 12;
+static const byte PIN_BUZZER = 6;
 static const int INT_IN = digitalPinToInterrupt(PIN_DIGITAL_IN);
 #else
 static const byte PIN_BUZZER = 0;
@@ -27,38 +28,32 @@ static const int INT_IN = 0;
 #endif
 
 struct QuietEventLogger {
-  static void announce(byte) {}
-  template <typename T>  static void print(T) {}
-  template <typename T, typename F> static void print(T, F) {}
-  template <typename T>  static void println(T) {}
+  template <typename T>  static void print(Notice, T) {}
+  template <typename T, typename F> static void print(Notice, T, F) {}
+  template <typename T>  static void println(Notice, T) {}
 };
 
 struct BuzzingEventLogger {
-  static void announce(byte b) {
-    if (b == 9) {
-      tone(PIN_BUZZER, NOTE_E3 - b * 15, 10);
-      delay(11);
-    }
+  template <typename T> static void print(Notice, T) {}
+  template <typename T, typename F> static void print(Notice, T, F) {}
+  template <typename T> static void println(Notice n, T) {
+    if (n < MAX_NOTICE) tone(PIN_BUZZER, NOTE_E1 + n * 30, 10);
   }
-  template <typename T> static void print(T) {}
-  template <typename T, typename F> static void print(T, F) {}
-  template <typename T> static void println(T) {}
 };
 
 struct SerialEventLogger {
-  static void announce(byte) {}
-  template <typename T> static void print(T t) {
-    Serial.print(t);
+  template <typename T> static void print(Notice n, T t) {
+    if (n < MAX_NOTICE) Serial.print(t);
   }
-  template <typename T, typename F> static void print(T t, F f) {
-    Serial.print(t, f);
+  template <typename T, typename F> static void print(Notice n, T t, F f) {
+    if (n < MAX_NOTICE) Serial.print(t, f);
   }
-  template <typename T> static void println(T t) {
-    Serial.println(t);
+  template <typename T> static void println(Notice n, T t) {
+    if (n < MAX_NOTICE) Serial.println(t);
   }
 };
 
-static ProtocolHandler<BuzzingEventLogger, QuietEventLogger> handler;
+static ProtocolHandler<BuzzingEventLogger, logTiming> handler;
 static TransmitterButtonStorage transmitterButtonStorage;
 
 static void print_transmitter_and_button(const char* prefix, Packet packet) {
@@ -85,7 +80,7 @@ static void initial_learning() {
   unsigned long restart_millis = millis();
 
   transmitterButtonStorage.load();
-  if (logEvents > NO_LOG) {
+  if (logEvents) {
     dump_transmitters_and_buttons("Initial");
     Serial.println("Start learning");
   }
@@ -113,13 +108,13 @@ static void initial_learning() {
         freq1 = NOTE_A3;
         freq2 = NOTE_E3;
         if (change) {
-          if (logEvents > NO_LOG) {
+          if (logEvents) {
             Serial.println("Received wipe");
           }
           transmitterButtonStorage.forget_all();
         }
       } else {
-        if (logEvents > NO_LOG) {
+        if (logEvents) {
           print_transmitter_and_button("Received", packet);
           Serial.println(packet.on_or_off() ? "①" : "⓪");
         }
@@ -153,13 +148,13 @@ static void initial_learning() {
     tone(PIN_BUZZER, NOTE_A5, 40);
     delay(80);
   }
-  if (logEvents > NO_LOG) {
+  if (logEvents) {
     Serial.println("Ended learning");
   }
 }
 
 void setup() {
-  if (logEvents > NO_LOG) {
+  if (logEvents) {
     Serial.begin(115200);
   }
   pinMode(PIN_DIGITAL_IN, INPUT);
@@ -206,7 +201,7 @@ void loop() {
   if (bits != VOID_BITS) {
     const Packet packet(bits);
     const bool recognized = transmitterButtonStorage.recognizes(packet);
-    if (logEvents > NO_LOG) {
+    if (logEvents) {
       print_transmitter_and_button("Received", packet);
       Serial.print(packet.on_or_off() ? "①" : "⓪");
       Serial.println(recognized ? ", hallelujah!" : ", never mind");

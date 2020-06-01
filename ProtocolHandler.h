@@ -1,8 +1,17 @@
-#define MEASUREMENT 0
-
+enum Notice { MISSED_PACKET,
+              WRONG_PARITY,
+              EXCESS_BITS, MISSING_BITS,
+              MISSING_PEAKS,
+              EXCESS_PEAKS,
+              EXCESS_NEARBY_PEAKS, MISSING_NEARBY_PEAKS,
+              MISSED_EPILOGUE,
+              PEAK_TOO_SOON, PEAK_TOO_LATE,
+              PREAMBLE_TOO_SOON, PREAMBLE_TOO_LATE,
+              SPURIOUS_PEAKS
+            };
 static const unsigned long VOID_BITS = ~0ul;
 
-template <typename MajorEventLogger, typename MinorEventLogger>
+template <typename EventLogger, bool logTiming>
 class ProtocolHandler {
     static const unsigned long MIN_PEAK_SPACING = 416;
     static const unsigned long MAX_PEAK_SPACING = 608;
@@ -14,17 +23,12 @@ class ProtocolHandler {
     static const unsigned long TRAIN_TIMEOUT = 0x30000;
 
     unsigned long last_rise_micros = micros();
-    enum { IDLE = 0xFF, DELIMITED = 0XFE, OPENED = 0, FINISHED = 32 };
-    unsigned rises = 0;
-    byte reception_stage;
-    byte extra_peaks_received;
-    unsigned long bits_received;
-    unsigned long packet_complete_micros;
-    unsigned long train_handled = VOID_BITS;
-#if MEASUREMENT
+    enum { IDLE = 0, DELIMITED = 1, PREAMBLED = 2, FINISHED = 66, FINAL };
     unsigned long delimiter_micros;
-    unsigned long times[FINISHED + 2];
-#endif
+    unsigned long peak_micros[FINAL];
+    byte reception_stage;
+    unsigned long train_handled = VOID_BITS;
+    unsigned long train_established_micros;
 
     void abort_packet_train() {
       train_handled = VOID_BITS;
@@ -36,168 +40,161 @@ class ProtocolHandler {
     }
 
     void packet_delimited() {
-      if (reception_stage > OPENED && reception_stage < DELIMITED) {
-        if (reception_stage != FINISHED) {
-          if (reception_stage > 1) {
-            MinorEventLogger::announce(0);
-            MinorEventLogger::print("Invalid vale count ");
-            MinorEventLogger::println(reception_stage);
-          }
-        } else if (extra_peaks_received != (bits_received & 1)) {
-          MajorEventLogger::announce(1);
-          MajorEventLogger::print("Invalid final peak count ");
-          MajorEventLogger::println(1 + extra_peaks_received);
-        } else if (train_handled == VOID_BITS) {
-          MajorEventLogger::announce(2);
-          MajorEventLogger::println("Packet received but missed by main loop");
-        } else if (train_handled != bits_received) {
-          MajorEventLogger::announce(3);
-          MajorEventLogger::print(train_handled, BIN);
-          MajorEventLogger::println(" received, but then");
-          MajorEventLogger::print(bits_received, BIN);
-          MajorEventLogger::println(" received!");
-        }
+      if (reception_stage == FINISHED) {
+        EventLogger::println(MISSED_PACKET, "Packet received but missed by main loop");
+      } else if (reception_stage > FINISHED / 2) {
+        EventLogger::print(MISSING_PEAKS, "Invalid peak count ");
+        EventLogger::println(MISSING_PEAKS, reception_stage);
+      } else if (reception_stage > IDLE) {
+        EventLogger::print(SPURIOUS_PEAKS, "Invalid peak count ");
+        EventLogger::println(SPURIOUS_PEAKS, reception_stage);
       }
     }
 
   public:
     void handleRise() {
-      ++rises;
       const unsigned long now = micros();
       const unsigned long duration = now - last_rise_micros;
       last_rise_micros = now;
-
       if (duration >= MIN_PACKET_SPACING) {
         packet_delimited();
-#      if MEASUREMENT
         delimiter_micros = duration;
-        times[0] = now;
-#      endif
+        peak_micros[0] = now;
         reception_stage = DELIMITED;
-      } else if (reception_stage == IDLE) {
-        // wait for delimiter
-      } else if (reception_stage == DELIMITED) {
-        if (duration < MIN_PACKET_PREAMBLE) {
-          MinorEventLogger::announce(4);
-          MinorEventLogger::print(duration);
-          MinorEventLogger::println("µs short preamble after delimiter");
-          cancel_packet();
-          return;
+      } else if (reception_stage > IDLE) {
+        if (reception_stage < FINAL) {
+          peak_micros[reception_stage] = now;
         }
-        if (duration > MAX_PACKET_PREAMBLE) {
-          MinorEventLogger::announce(5);
-          MinorEventLogger::print(duration);
-          MinorEventLogger::println("µs long preamble after delimiter");
-          cancel_packet();
-          return;
-        }
-#      if MEASUREMENT
-        if (train_handled == VOID_BITS) {
-          times[1] = now;
-        }
-#      endif
-        reception_stage = OPENED;
-        extra_peaks_received = 0;
-        bits_received = 0;
-      } else if (duration < MIN_VALE_SPACING) {
-        if (duration < MIN_PEAK_SPACING) {
-          MinorEventLogger::announce(6);
-          MinorEventLogger::print(duration);
-          MinorEventLogger::print("µs peak in vale #");
-          MinorEventLogger::println(reception_stage);
-          cancel_packet();
-          return;
-        }
-        if (duration > MAX_PEAK_SPACING) {
-          MinorEventLogger::announce(7);
-          MinorEventLogger::print(duration);
-          MinorEventLogger::print("µs vale after vale #");
-          MinorEventLogger::println(reception_stage);
-          cancel_packet();
-          return;
-        }
-        ++extra_peaks_received;
-      } else {
-        const byte bit = 1 + (bits_received & 1) - extra_peaks_received;
-        if (bit > 1) {
-          if (reception_stage > 1) {
-            if (bit & 0x80) {
-              MinorEventLogger::announce(8);
-              MinorEventLogger::print("Too many peaks ");
-            } else {
-              MinorEventLogger::announce(9);
-              MinorEventLogger::print("Too few peaks ");
-            }
-            MinorEventLogger::println(1 + extra_peaks_received);
-          }
-          cancel_packet();
-          return;
-        }
-        bits_received = (bits_received << 1) | bit;
-        extra_peaks_received = 0;
         ++reception_stage;
-#      if MEASUREMENT
-        if (reception_stage <= FINISHED) {
-          times[1 + reception_stage] = now;
-        }
-#      endif
-        if (reception_stage == FINISHED && train_handled == VOID_BITS) {
-          packet_complete_micros = now + PARITY_TIMEOUT;
-        }
       }
     }
 
     bool is_alive() const {
-      static unsigned last_rises = 0;
-      if (last_rises != rises) {
-        last_rises = rises;
+      static unsigned long last_seen_rise_micros = last_rise_micros;
+      if (last_seen_rise_micros != last_rise_micros) {
+        last_seen_rise_micros = last_rise_micros;
         return true;
       } else {
         return false;
       }
     }
 
+    unsigned long decode() const {
+      const unsigned long preamble_duration = peak_micros[1] - peak_micros[0];
+      if (preamble_duration < MIN_PACKET_PREAMBLE) {
+        EventLogger::print(PREAMBLE_TOO_SOON, preamble_duration);
+        EventLogger::println(PREAMBLE_TOO_SOON, "µs short preamble after delimiter");
+        return VOID_BITS;
+      }
+      if (preamble_duration > MAX_PACKET_PREAMBLE) {
+        EventLogger::print(PREAMBLE_TOO_LATE, preamble_duration);
+        EventLogger::println(PREAMBLE_TOO_LATE, "µs long preamble after delimiter");
+        return VOID_BITS;
+      }
+
+      if (reception_stage > FINISHED) {
+        EventLogger::print(EXCESS_PEAKS, reception_stage);
+        EventLogger::println(EXCESS_PEAKS, " peaks in a packet");
+        return VOID_BITS;
+      }
+
+      unsigned long bits_received = 0;
+      byte consecutive_nearby_rises = 0;
+      byte bitcount = 0;
+      for (byte s = PREAMBLED; s < FINISHED; ++s) {
+        const unsigned long duration = peak_micros[s] - peak_micros[s - 1];
+        if (duration < MIN_VALE_SPACING) {
+          if (duration < MIN_PEAK_SPACING) {
+            EventLogger::print(PEAK_TOO_SOON, duration);
+            EventLogger::print(PEAK_TOO_SOON, "µs peak #");
+            EventLogger::println(PEAK_TOO_SOON, reception_stage);
+            return VOID_BITS;
+          }
+          if (duration > MAX_PEAK_SPACING) {
+            EventLogger::print(PEAK_TOO_LATE, duration);
+            EventLogger::print(PEAK_TOO_LATE, "µs peak #");
+            EventLogger::println(PEAK_TOO_LATE, reception_stage);
+            return VOID_BITS;
+          }
+          ++consecutive_nearby_rises;
+        } else {
+          const byte bit = 1 + (bits_received & 1) - consecutive_nearby_rises;
+          if (bit > 1) {
+            if (bit & 0x80) {
+              EventLogger::print(EXCESS_NEARBY_PEAKS, "Too many nearby peaks at #");
+              EventLogger::println(EXCESS_NEARBY_PEAKS, s);
+            } else {
+              EventLogger::print(MISSING_NEARBY_PEAKS, "Too few nearby peaks at #");
+              EventLogger::println(MISSING_NEARBY_PEAKS, s);
+            }
+            return VOID_BITS;
+          }
+          bits_received = (bits_received << 1) | bit;
+          bitcount += 1;
+          consecutive_nearby_rises = 0;
+        }
+      }
+      if (bitcount < 32) {
+        EventLogger::print(MISSING_BITS, "#bits=");
+        EventLogger::println(MISSING_BITS, bitcount);
+        return VOID_BITS;
+      }
+      if (bitcount > 32) {
+        EventLogger::print(EXCESS_BITS, "#bits=");
+        EventLogger::println(EXCESS_BITS, bitcount);
+        return VOID_BITS;
+      }
+      if (consecutive_nearby_rises != (bits_received & 1)) {
+        EventLogger::print(WRONG_PARITY, "Incorrect #parity peaks ");
+        EventLogger::println(WRONG_PARITY, 1 + consecutive_nearby_rises);
+        return VOID_BITS;
+      }
+      return bits_received;
+    }
+
     unsigned long receive() {
       noInterrupts();
       const bool has_old = train_handled != VOID_BITS;
-      const bool has_new = reception_stage == FINISHED
-                           && extra_peaks_received == byte(bits_received & 1)
-                           && bits_received != train_handled;
-      if (has_old || has_new) {
-        const unsigned long packet_complete = micros() - packet_complete_micros;
-        if ((packet_complete & 0x8000) == 0) {
-          // Otherwise packet_complete_micros is in the future (regardless of overflow)
-          if (has_new) {
-            train_handled = bits_received;
-            reception_stage = IDLE;
-#          if MEASUREMENT
-            const unsigned long now = micros();
-            Serial.print("After ");
-            Serial.print(delimiter_micros);
-            Serial.println("µs delimiter");
-            for (byte i = 1; i < FINISHED + 2; ++i) {
-              Serial.print("  ");
-              Serial.print(times[i]);
-              Serial.print(" start of bit ");
-              Serial.println(i);
-            }
+      const bool might_have_new = reception_stage >= FINISHED;
+      if (!has_old && !might_have_new) {
+        interrupts();
+        return VOID_BITS;
+      }
+      const unsigned long now = micros();
+      const unsigned long last_peak = peak_micros[reception_stage - 1];
+      if (might_have_new && now - last_peak > PARITY_TIMEOUT) {
+        // Keep blocking interrupts while we process the received packet - rises right now are noise
+        if (logTiming) {
+          Serial.print("After ");
+          Serial.print(delimiter_micros);
+          Serial.println("µs delimiter");
+          for (byte i = 0; i < reception_stage; ++i) {
             Serial.print("  ");
-            Serial.print(now);
-            Serial.println(" posted");
-            Serial.print("  ");
-            Serial.print(micros());
-            Serial.println(" finishing this debug output");
-#          endif
-            interrupts();
-            return train_handled;
-          } else if (packet_complete > TRAIN_TIMEOUT) {
-            abort_packet_train();
-            interrupts();
-            MinorEventLogger::announce(10);
-            MinorEventLogger::println("Stop expecting rest of packet train");
-            return VOID_BITS;
+            Serial.print(peak_micros[i]);
+            Serial.print(" peak ");
+            Serial.println(i + 1);
           }
+          Serial.print("  ");
+          Serial.print(now);
+          Serial.println(" posted");
+          Serial.print("  ");
+          Serial.print(micros());
+          Serial.println(" finishing this debug output");
         }
+        const unsigned long bits_received = decode();
+        reception_stage = IDLE;
+        if (bits_received != VOID_BITS && bits_received != train_handled) {
+          train_handled = bits_received;
+          interrupts();
+          train_established_micros = last_peak;
+          return train_handled;
+        }
+      }
+      if (has_old && now - train_established_micros > TRAIN_TIMEOUT) {
+        abort_packet_train();
+        interrupts();
+        EventLogger::println(MISSED_EPILOGUE, "Stop expecting rest of packet train");
+        return VOID_BITS;
       }
       interrupts();
       return VOID_BITS;
