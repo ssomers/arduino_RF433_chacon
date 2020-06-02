@@ -4,13 +4,13 @@
 
 static const bool logEvents = false;
 static const bool logTiming = false;
-static const Notice MAX_NOTICE = EXCESS_PEAKS;
+static const Notice MAX_NOTICE = EXCESS_TOTAL_PEAKS;
 
 static const byte PIN_DIGITAL_IN = 2;
 static const byte PIN_DIGITAL_OUT_POWER = 3;
 static const byte PIN_DIGITAL_OUT_SPEED = 4;
 static const unsigned long INITIAL_LEARNING_MILLIS = 4000;
-static const unsigned long LOOP_MILLIS = 4;
+static const unsigned long LOOP_MILLIS = 5;
 static const byte LOOPS_PER_BOOST = 200;
 
 #ifdef LED_BUILTIN
@@ -27,6 +27,9 @@ static const byte LED_BUILTIN = 1;
 static const int INT_IN = 0;
 #endif
 
+
+static bool error = false;
+
 struct QuietEventLogger {
   template <typename T>  static void print(Notice, T) {}
   template <typename T, typename F> static void print(Notice, T, F) {}
@@ -37,19 +40,19 @@ struct BuzzingEventLogger {
   template <typename T> static void print(Notice, T) {}
   template <typename T, typename F> static void print(Notice, T, F) {}
   template <typename T> static void println(Notice n, T) {
-    if (n < MAX_NOTICE) tone(PIN_BUZZER, NOTE_E1 + n * 30, 10);
+    error |= n <= MAX_NOTICE;
   }
 };
 
 struct SerialEventLogger {
   template <typename T> static void print(Notice n, T t) {
-    if (n < MAX_NOTICE) Serial.print(t);
+    if (n <= MAX_NOTICE) Serial.print(t);
   }
   template <typename T, typename F> static void print(Notice n, T t, F f) {
-    if (n < MAX_NOTICE) Serial.print(t, f);
+    if (n <= MAX_NOTICE) Serial.print(t, f);
   }
   template <typename T> static void println(Notice n, T t) {
-    if (n < MAX_NOTICE) Serial.println(t);
+    if (n <= MAX_NOTICE) Serial.println(t);
   }
 };
 
@@ -172,6 +175,12 @@ void setup() {
 }
 
 void loop() {
+  if (error) {
+    error = false;
+    tone(PIN_BUZZER, NOTE_E2);
+    delay(20);
+    noTone(PIN_BUZZER);
+  }
   delay(LOOP_MILLIS); // save energy & provide timer
 
   static byte alive_iterations = 0;

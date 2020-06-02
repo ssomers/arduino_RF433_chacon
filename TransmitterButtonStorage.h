@@ -84,7 +84,7 @@ class TransmitterButtonStorage {
 
     void store() {
       unsigned long* const address = 0;
-      for (byte i = 0; i < transmitter_button_count; ++i) {
+      for (byte i = 0; i < TRANSMITTER_BUTTONS_STORED; ++i) {
         eeprom_update_dword(&address[i], transmitter_buttons[i]);
       }
     }
