@@ -4,14 +4,15 @@
 
 static const bool logEvents = false;
 static const bool logTiming = false;
-static const Notice MAX_NOTICE = EXCESS_TOTAL_PEAKS;
+static const Notice IGNORED_NOTICE = SPURIOUS_PEAKS;
 
 static const byte PIN_DIGITAL_IN = 2;
 static const byte PIN_DIGITAL_OUT_POWER = 3;
 static const byte PIN_DIGITAL_OUT_SPEED = 4;
 static const unsigned long INITIAL_LEARNING_MILLIS = 4000;
 static const unsigned long LOOP_MILLIS = 5;
-static const byte LOOPS_PER_BOOST = 200;
+static const byte LOOPS_PER_BOOST = 250;
+static const byte LOOPS_PER_HEARTBEAT = 190;
 
 #ifdef LED_BUILTIN
 /*
@@ -28,31 +29,31 @@ static const int INT_IN = 0;
 #endif
 
 
-static bool error = false;
-
-struct QuietEventLogger {
-  template <typename T>  static void print(Notice, T) {}
-  template <typename T, typename F> static void print(Notice, T, F) {}
-  template <typename T>  static void println(Notice, T) {}
-};
+static Notice worst_notice = IGNORED_NOTICE;
+static unsigned long worst_notice_time;
+static unsigned long last_good_time;
 
 struct BuzzingEventLogger {
   template <typename T> static void print(Notice, T) {}
   template <typename T, typename F> static void print(Notice, T, F) {}
   template <typename T> static void println(Notice n, T) {
-    error |= n <= MAX_NOTICE;
+    const unsigned long now = micros();
+    if (worst_notice > n && duration_from_to(last_good_time, now) > TRAIN_TIMEOUT) {
+      worst_notice = n;
+      worst_notice_time = now;
+    }
   }
 };
 
 struct SerialEventLogger {
   template <typename T> static void print(Notice n, T t) {
-    if (n <= MAX_NOTICE) Serial.print(t);
+    if (n < IGNORED_NOTICE) Serial.print(t);
   }
   template <typename T, typename F> static void print(Notice n, T t, F f) {
-    if (n <= MAX_NOTICE) Serial.print(t, f);
+    if (n < IGNORED_NOTICE) Serial.print(t, f);
   }
   template <typename T> static void println(Notice n, T t) {
-    if (n <= MAX_NOTICE) Serial.println(t);
+    if (n < IGNORED_NOTICE) Serial.println(t);
   }
 };
 
@@ -91,13 +92,16 @@ static void initial_learning() {
   for (;;) {
     const unsigned long passed_millis = millis();
     if (passed_millis >= restart_millis + INITIAL_LEARNING_MILLIS) {
-      if (transmitterButtonStorage.count() != 0) {
-        break;
-      }
+      break;
     }
     if (passed_millis >= buzz_millis) {
-      buzz_millis += 1000;
-      tone(PIN_BUZZER, NOTE_E4, 20);
+      if (digitalRead(LED_BUILTIN) == LOW) {
+        digitalWrite(LED_BUILTIN, HIGH);
+        tone(PIN_BUZZER, NOTE_E4, 20);
+      } else {
+        digitalWrite(LED_BUILTIN, LOW);
+      }
+      buzz_millis += 500;
     }
 
     const unsigned long bits = handler.receive();
@@ -147,13 +151,18 @@ static void initial_learning() {
     }
   }
   transmitterButtonStorage.store();
-  for (int i = 0; i < transmitterButtonStorage.count(); ++i) {
-    tone(PIN_BUZZER, NOTE_A5, 40);
-    delay(80);
+  for (byte i = transmitterButtonStorage.count(); i > 0; --i) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    tone(PIN_BUZZER, NOTE_A5);
+    delay(50);
+    noTone(PIN_BUZZER);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(25);
   }
   if (logEvents) {
     Serial.println("Ended learning");
   }
+  last_good_time = micros();
 }
 
 void setup() {
@@ -171,33 +180,64 @@ void setup() {
 #ifdef LED_BUILTIN
   delay(100); // avoid spurious beep
 #endif
-  initial_learning();
+  do {
+    initial_learning();
+  } while (transmitterButtonStorage.count() == 0);
+}
+
+static void heartbeat() {
+  static byte iterations = 0;
+  switch (++iterations) {
+    case LOOPS_PER_HEARTBEAT - 44:
+      if (handler.is_alive()) digitalWrite(LED_BUILTIN, HIGH);
+      break;
+    case LOOPS_PER_HEARTBEAT - 40:
+      digitalWrite(LED_BUILTIN, LOW);
+      break;
+    case LOOPS_PER_HEARTBEAT - 4:
+      digitalWrite(LED_BUILTIN, HIGH);
+      break;
+    case LOOPS_PER_HEARTBEAT - 0:
+      digitalWrite(LED_BUILTIN, LOW);
+      iterations = 0;
+  }
+}
+
+static void report_worst_notice() {
+  static byte being_reported = 0;
+  static byte iterations;
+
+  if (being_reported == 0 && worst_notice < IGNORED_NOTICE && duration_from_to(worst_notice_time, micros()) > TRAIN_TIMEOUT) {
+    being_reported = 1 + worst_notice;
+    worst_notice = IGNORED_NOTICE;
+    iterations = 0;
+  }
+  if (being_reported > 0) {
+    switch (++iterations) {
+      case 1: tone(PIN_BUZZER, NOTE_A2); break;
+      case 21: noTone(PIN_BUZZER); break;
+      case 31: tone(PIN_BUZZER, NOTE_E3); break;
+      case 41: {
+          if (being_reported < 5) {
+            noTone(PIN_BUZZER);
+            being_reported -= 1;
+            iterations = 21;
+          }
+          break;
+        }
+      case 51:
+        noTone(PIN_BUZZER);
+        being_reported -= 5;
+        iterations = 21;
+        break;
+    }
+  }
 }
 
 void loop() {
-  if (error) {
-    error = false;
-    tone(PIN_BUZZER, NOTE_E2);
-    delay(20);
-    noTone(PIN_BUZZER);
-  }
   delay(LOOP_MILLIS); // save energy & provide timer
-
-  static byte alive_iterations = 0;
-  switch (++alive_iterations) {
-    case 200:
-      if (handler.is_alive()) digitalWrite(LED_BUILTIN, HIGH);
-      break;
-    case 204:
-      digitalWrite(LED_BUILTIN, LOW);
-      break;
-    case 240:
-      digitalWrite(LED_BUILTIN, HIGH);
-      break;
-    case 244:
-      digitalWrite(LED_BUILTIN, LOW);
-      alive_iterations = 0;
-  }
+  heartbeat();
+  report_worst_notice();
 
   static byte boost_iterations = 0;
   if (boost_iterations > 0) {
@@ -208,6 +248,9 @@ void loop() {
 
   const unsigned long bits = handler.receive();
   if (bits != VOID_BITS) {
+    last_good_time = micros();
+    worst_notice = IGNORED_NOTICE; // wipe errors from initial packet(s) in packet train
+
     const Packet packet(bits);
     const bool recognized = transmitterButtonStorage.recognizes(packet);
     if (logEvents) {
