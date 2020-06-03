@@ -19,6 +19,9 @@ class TransmitterButtonStorage {
           break;
         }
       }
+      for (byte i = transmitter_button_count; i < TRANSMITTER_BUTTONS_STORED; ++i) {
+        transmitter_buttons[i] = NONE;
+      }
     }
 
     byte count() const {
