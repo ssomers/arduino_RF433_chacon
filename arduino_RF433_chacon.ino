@@ -4,7 +4,7 @@
 
 static const bool logEvents = false;
 static const bool logTiming = false;
-static const Notice IGNORED_NOTICE = SPURIOUS_PEAKS;
+static const Notice IGNORED_NOTICE = EXCESS_TOTAL_PEAKS;
 
 static const byte PIN_DIGITAL_IN = 2;
 static const byte PIN_DIGITAL_OUT_POWER = 3;
@@ -169,6 +169,8 @@ void setup() {
   if (logEvents) {
     Serial.begin(115200);
   }
+
+  ADCSRA = 0; // disable unused ADC to save power
   pinMode(PIN_DIGITAL_IN, INPUT);
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(PIN_BUZZER, OUTPUT);
@@ -189,7 +191,9 @@ static void heartbeat() {
   static byte iterations = 0;
   switch (++iterations) {
     case LOOPS_PER_HEARTBEAT - 44:
-      if (handler.is_alive()) digitalWrite(LED_BUILTIN, HIGH);
+      if (handler.is_alive()) {
+        digitalWrite(LED_BUILTIN, HIGH);
+      }
       break;
     case LOOPS_PER_HEARTBEAT - 40:
       digitalWrite(LED_BUILTIN, LOW);
@@ -204,31 +208,41 @@ static void heartbeat() {
 }
 
 static void report_worst_notice() {
-  static byte being_reported = 0;
+  static byte beeps_buzzing = 0;
   static byte iterations;
 
-  if (being_reported == 0 && worst_notice < IGNORED_NOTICE && duration_from_to(worst_notice_time, micros()) > TRAIN_TIMEOUT) {
-    being_reported = 1 + worst_notice;
+  if (beeps_buzzing == 0 && worst_notice < IGNORED_NOTICE
+      && duration_from_to(worst_notice_time, micros()) > TRAIN_TIMEOUT) {
+    beeps_buzzing = worst_notice;
     worst_notice = IGNORED_NOTICE;
     iterations = 0;
   }
-  if (being_reported > 0) {
+  if (beeps_buzzing > 0) {
     switch (++iterations) {
-      case 1: tone(PIN_BUZZER, NOTE_A2); break;
-      case 21: noTone(PIN_BUZZER); break;
-      case 31: tone(PIN_BUZZER, NOTE_E3); break;
-      case 41: {
-          if (being_reported < 5) {
-            noTone(PIN_BUZZER);
-            being_reported -= 1;
-            iterations = 21;
-          }
-          break;
-        }
-      case 51:
+      case 1:
+        tone(PIN_BUZZER, NOTE_A2);
+        break;
+      case 21:
         noTone(PIN_BUZZER);
-        being_reported -= 5;
-        iterations = 21;
+        break;
+      case 31:
+        tone(PIN_BUZZER, NOTE_E3);
+        break;
+      case 37:
+        if (beeps_buzzing < 5) {
+          noTone(PIN_BUZZER);
+        }
+        break;
+      case 54:
+        if (beeps_buzzing < 5) {
+          beeps_buzzing -= 1;
+          iterations = 30;
+        }
+        noTone(PIN_BUZZER);
+        break;
+      case 64:
+        beeps_buzzing -= 5;
+        iterations = 30;
         break;
     }
   }

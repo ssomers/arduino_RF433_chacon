@@ -1,13 +1,13 @@
-enum Notice { MISSED_PACKET,
-              WRONG_PARITY,
-              EXCESS_BITS, MISSING_BITS,
-              MISSING_1_PEAK, MISSING_2_PEAKS,
-              EXCESS_ADJACENT_PEAKS, MISSING_ADJACENT_PEAKS,
-              PEAK_TOO_SOON, PEAK_TOO_LATE,
-              PREAMBLE_TOO_SOON, PREAMBLE_TOO_LATE,
-              EXCESS_TOTAL_PEAKS,
-              SPURIOUS_PEAKS,
-              END_OF_TRAIN
+enum Notice { MISSED_PACKET = 1,
+              WRONG_PARITY = 2,
+              EXCESS_BITS = 3, MISSING_BITS = 4,
+              MISSING_SOME_PEAKS = 5,
+              EXCESS_ADJACENT_PEAKS = 6, MISSING_ADJACENT_PEAKS = 7,
+              PEAK_TOO_SOON = 8, PEAK_TOO_LATE = 9,
+              PREAMBLE_TOO_SOON = 10, PREAMBLE_TOO_LATE = 11,
+              EXCESS_TOTAL_PEAKS = 12,
+              SPURIOUS_PEAKS = 13,
+              END_OF_TRAIN = 16
             };
 static const unsigned long VOID_BITS = ~0ul;
 static const unsigned long TRAIN_TIMEOUT = 0x60000;
@@ -41,10 +41,8 @@ class ProtocolHandler {
     void packet_delimited() {
       if (reception_stage == FINISHED) {
         EventLogger::println(MISSED_PACKET, "Packet received but missed by main loop");
-      } else if (reception_stage == FINISHED - 1) {
-        EventLogger::println(MISSING_1_PEAK, "Missing 1 peak");
-      } else if (reception_stage == FINISHED - 2) {
-        EventLogger::println(MISSING_2_PEAKS, "Missing 2 peaks");
+      } else if (reception_stage >= FINISHED - 22) {
+        EventLogger::println(MISSING_SOME_PEAKS, "Missing some peaks");
       } else if (reception_stage > DELIMITED) {
         EventLogger::print(SPURIOUS_PEAKS, "Invalid peak count ");
         EventLogger::println(SPURIOUS_PEAKS, reception_stage);
