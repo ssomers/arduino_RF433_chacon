@@ -4,7 +4,7 @@
 
 static const bool logEvents = false;
 static const bool logTiming = false;
-static const Notice IGNORED_NOTICE = EXCESS_TOTAL_PEAKS;
+static const Notice IGNORED_NOTICE = PREAMBLE_TOO_SOON;
 
 static const byte PIN_DIGITAL_IN = 2;
 static const byte PIN_DIGITAL_OUT_POWER = 3;
@@ -170,7 +170,6 @@ void setup() {
     Serial.begin(115200);
   }
 
-  ADCSRA = 0; // disable unused ADC to save power
   pinMode(PIN_DIGITAL_IN, INPUT);
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(PIN_BUZZER, OUTPUT);

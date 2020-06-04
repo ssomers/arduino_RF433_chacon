@@ -18,12 +18,12 @@ inline unsigned long duration_from_to(unsigned long early, unsigned long later) 
 
 template <typename EventLogger, bool logTiming>
 class ProtocolHandler {
-    static const unsigned long MIN_ADJACENT_PEAK_SPACING = 416;
-    static const unsigned long MAX_ADJACENT_PEAK_SPACING = 608;
-    static const unsigned long MIN_SEPARATE_PEAK_SPACING = 1488;
-    static const unsigned long MIN_PACKET_SPACING = 9984;
-    static const unsigned long MIN_PACKET_PREAMBLE = 2720;
-    static const unsigned long MAX_PACKET_PREAMBLE = 3200;
+    static const unsigned long MIN_ADJACENT_PEAK_SPACING = 0x100;
+    static const unsigned long MAX_ADJACENT_PEAK_SPACING = 0x300;
+    static const unsigned long MIN_SEPARATE_PEAK_SPACING = 0x500;
+    static const unsigned long MIN_PACKET_SPACING = 0x2000;
+    static const unsigned long MIN_PACKET_PREAMBLE = 0XA00;
+    static const unsigned long MAX_PACKET_PREAMBLE = 0xD00;
     static const unsigned long PARITY_TIMEOUT = 3 * MAX_ADJACENT_PEAK_SPACING;
 
     enum { IDLE = 0, DELIMITED = 1, PREAMBLED = 2, FINISHED = 66 };
@@ -75,14 +75,24 @@ class ProtocolHandler {
         packet_delimited();
         cancel_packet();
         reception_stage = DELIMITED;
-      } else if (reception_stage > IDLE) {
-        ++reception_stage;
-        if (reception_stage > FINISHED) {
-          EventLogger::println(EXCESS_TOTAL_PEAKS, "Too many peaks in a packet");
-          dump_packet(now);
-          cancel_packet();
-        }
-      }
+      } else switch (reception_stage) {
+          case IDLE:
+            break;
+          case DELIMITED:
+            if (is_valid_preamble(spacing)) {
+              reception_stage = PREAMBLED;
+            } else {
+              reception_stage = IDLE;
+            }
+            break;
+          case FINISHED:
+            EventLogger::println(EXCESS_TOTAL_PEAKS, "Too many peaks in a packet");
+            dump_packet(now);
+            reception_stage = IDLE;
+            break;
+          default:
+            ++reception_stage;
+        };
       peak_micros[reception_stage] = now;
     }
 
@@ -99,19 +109,21 @@ class ProtocolHandler {
     }
 
   private:
-    unsigned long decode() const {
-      const unsigned long preamble_duration = peak_micros[PREAMBLED] - peak_micros[DELIMITED];
+    static bool is_valid_preamble(unsigned long preamble_duration) {
       if (preamble_duration < MIN_PACKET_PREAMBLE) {
         EventLogger::print(PREAMBLE_TOO_SOON, preamble_duration);
         EventLogger::println(PREAMBLE_TOO_SOON, "µs short preamble after delimiter");
-        return VOID_BITS;
+        return false;
       }
       if (preamble_duration > MAX_PACKET_PREAMBLE) {
         EventLogger::print(PREAMBLE_TOO_LATE, preamble_duration);
         EventLogger::println(PREAMBLE_TOO_LATE, "µs long preamble after delimiter");
-        return VOID_BITS;
+        return false;
       }
+      return true;
+    }
 
+    unsigned long decode() const {
       unsigned long bits_received = 0;
       byte extra_adjacent_peaks = 0;
       byte bitcount = 0;
