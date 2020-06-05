@@ -1,14 +1,15 @@
-enum Notice { MISSED_PACKET = 1,
-              WRONG_PARITY = 2,
-              EXCESS_BITS = 3, MISSING_BITS = 4,
-              MISSING_SOME_PEAKS = 5,
-              EXCESS_ADJACENT_PEAKS = 6, MISSING_ADJACENT_PEAKS = 7,
-              PEAK_TOO_SOON = 8, PEAK_TOO_LATE = 9,
-              PREAMBLE_TOO_SOON = 10, PREAMBLE_TOO_LATE = 11,
-              EXCESS_TOTAL_PEAKS = 12,
-              SPURIOUS_PEAKS = 13,
-              END_OF_TRAIN = 16
-            };
+enum ProtocolNotice : byte { NO_NOTICE,
+                             END_OF_TRAIN,
+                             SPURIOUS_PEAKS,
+                             EXCESS_TOTAL_PEAKS,
+                             PREAMBLE_TOO_SOON = 4, PREAMBLE_TOO_LATE = 5,
+                             MISSING_SOME_PEAKS = 6,
+                             PEAK_TOO_SOON = 7, PEAK_TOO_LATE = 8,
+                             MISSING_ADJACENT_PEAKS = 10, EXCESS_ADJACENT_PEAKS = 11,
+                             MISSING_BITS = 12, EXCESS_BITS = 11,
+                             WRONG_PARITY = 13,
+                             MISSED_PACKET = 14,
+                           };
 static const unsigned long VOID_BITS = ~0ul;
 static const unsigned long TRAIN_TIMEOUT = 0x60000;
 

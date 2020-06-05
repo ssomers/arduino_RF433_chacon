@@ -1,15 +1,19 @@
+#include <ATtinySerialOut.h>
+
 #include "pitches.h"
 #include "ProtocolHandler.h"
 #include "TransmitterButtonStorage.h"
 
 static const bool logEvents = false;
 static const bool logTiming = false;
-static const Notice IGNORED_NOTICE = PREAMBLE_TOO_SOON;
+static const ProtocolNotice MIN_CONSIDERED_NOTICE = EXCESS_TOTAL_PEAKS;
+static const ProtocolNotice LATER_MIN_CONSIDERED_NOTICE = MISSING_ADJACENT_PEAKS;
 
 static const byte PIN_DIGITAL_IN = 2;
-static const byte PIN_DIGITAL_OUT_POWER = 3;
-static const byte PIN_DIGITAL_OUT_SPEED = 4;
+static const byte PIN_DIGITAL_OUT_SLOW = 3;
+static const byte PIN_DIGITAL_OUT_FAST = 4;
 static const unsigned long INITIAL_LEARNING_MILLIS = 4000;
+static const unsigned long INITIAL_CHATTY_MILLIS = 40000;
 static const unsigned long LOOP_MILLIS = 5;
 static const byte LOOPS_PER_BOOST = 250;
 static const byte LOOPS_PER_HEARTBEAT = 190;
@@ -28,32 +32,61 @@ static const byte LED_BUILTIN = 1;
 static const int INT_IN = 0;
 #endif
 
+enum Speed : byte { OFF, SLOW, FAST };
 
-static Notice worst_notice = IGNORED_NOTICE;
-static unsigned long worst_notice_time;
+static void write_speed(Speed speed) {
+  if (speed != SLOW) {
+    digitalWrite(PIN_DIGITAL_OUT_SLOW, LOW);
+  }
+  if (speed != FAST) {
+    digitalWrite(PIN_DIGITAL_OUT_FAST, LOW);
+  }
+  if (speed == SLOW) {
+    digitalWrite(PIN_DIGITAL_OUT_SLOW, HIGH);
+  }
+  if (speed == FAST) {
+    digitalWrite(PIN_DIGITAL_OUT_FAST, HIGH);
+  }
+}
+
+static Speed read_speed() {
+  if (digitalRead(PIN_DIGITAL_OUT_FAST)) {
+    return FAST;
+  } else if (digitalRead(PIN_DIGITAL_OUT_SLOW)) {
+    return SLOW;
+  } else {
+    return OFF;
+  }
+}
+
+
+enum LocalNotice : byte { GOING_NOWHERE = 128, GOING_UP, GOING_DOWN };
+
+static ProtocolNotice min_buzzed_notice = MIN_CONSIDERED_NOTICE;
+static byte primary_notice = 0;
+static unsigned long primary_notice_time;
 static unsigned long last_good_time;
 
 struct BuzzingEventLogger {
-  template <typename T> static void print(Notice, T) {}
-  template <typename T, typename F> static void print(Notice, T, F) {}
-  template <typename T> static void println(Notice n, T) {
-    const unsigned long now = micros();
-    if (worst_notice > n && duration_from_to(last_good_time, now) > TRAIN_TIMEOUT) {
-      worst_notice = n;
-      worst_notice_time = now;
+  template <typename T> static void print(ProtocolNotice, T) {}
+  template <typename T, typename F> static void print(ProtocolNotice, T, F) {}
+  template <typename T> static void println(ProtocolNotice n, T) {
+    if (n > primary_notice) {
+      primary_notice = n;
+      primary_notice_time = micros();
     }
   }
 };
 
 struct SerialEventLogger {
-  template <typename T> static void print(Notice n, T t) {
-    if (n < IGNORED_NOTICE) Serial.print(t);
+  template <typename T> static void print(ProtocolNotice n, T t) {
+    if (n >= MIN_CONSIDERED_NOTICE) Serial.print(t);
   }
-  template <typename T, typename F> static void print(Notice n, T t, F f) {
-    if (n < IGNORED_NOTICE) Serial.print(t, f);
+  template <typename T, typename F> static void print(ProtocolNotice n, T t, F f) {
+    if (n >= MIN_CONSIDERED_NOTICE) Serial.print(t, f);
   }
-  template <typename T> static void println(Notice n, T t) {
-    if (n < IGNORED_NOTICE) Serial.println(t);
+  template <typename T> static void println(ProtocolNotice n, T t) {
+    if (n >= MIN_CONSIDERED_NOTICE) Serial.println(t);
   }
 };
 
@@ -173,8 +206,8 @@ void setup() {
   pinMode(PIN_DIGITAL_IN, INPUT);
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(PIN_BUZZER, OUTPUT);
-  pinMode(PIN_DIGITAL_OUT_POWER, OUTPUT);
-  pinMode(PIN_DIGITAL_OUT_SPEED, OUTPUT);
+  pinMode(PIN_DIGITAL_OUT_SLOW, OUTPUT);
+  pinMode(PIN_DIGITAL_OUT_FAST, OUTPUT);
   attachInterrupt(INT_IN, []() {
     handler.handleRise();
   }, RISING);
@@ -206,42 +239,55 @@ static void heartbeat() {
   }
 }
 
-static void report_worst_notice() {
+static void quiet_down() {
+  if (min_buzzed_notice != LATER_MIN_CONSIDERED_NOTICE) {
+    if (millis() > INITIAL_CHATTY_MILLIS) {
+      min_buzzed_notice = LATER_MIN_CONSIDERED_NOTICE;
+    }
+  }
+}
+
+static void buzz_primary_notice() {
   static byte beeps_buzzing = 0;
   static byte iterations;
 
-  if (beeps_buzzing == 0 && worst_notice < IGNORED_NOTICE
-      && duration_from_to(worst_notice_time, micros()) > TRAIN_TIMEOUT) {
-    beeps_buzzing = worst_notice;
-    worst_notice = IGNORED_NOTICE;
+  if (primary_notice >= GOING_NOWHERE) {
+    beeps_buzzing = primary_notice;
+    primary_notice = NO_NOTICE;
     iterations = 0;
+  } else if (beeps_buzzing == 0 && primary_notice >= min_buzzed_notice) {
+    // postpone notice until we're sure it isn't going to be cancelled by a properly received packet
+    if (duration_from_to(primary_notice_time, micros()) > TRAIN_TIMEOUT) {
+      beeps_buzzing = primary_notice;
+      primary_notice = NO_NOTICE;
+      iterations = 0;
+    }
   }
+
   if (beeps_buzzing > 0) {
     switch (++iterations) {
       case 1:
-        tone(PIN_BUZZER, NOTE_A2);
+        tone(PIN_BUZZER,
+             beeps_buzzing >= GOING_NOWHERE ? NOTE_E5 : NOTE_A2, 80);
         break;
-      case 21:
-        noTone(PIN_BUZZER);
+      case 25:
+        tone(PIN_BUZZER,
+             beeps_buzzing == GOING_NOWHERE ? NOTE_E5 :
+             beeps_buzzing == GOING_UP ? NOTE_A6 :
+             beeps_buzzing == GOING_DOWN ? NOTE_E4 : NOTE_E3,
+             beeps_buzzing < 5 ? 25 : 75);
         break;
-      case 31:
-        tone(PIN_BUZZER, NOTE_E3);
-        break;
-      case 37:
-        if (beeps_buzzing < 5) {
-          noTone(PIN_BUZZER);
-        }
-        break;
-      case 54:
-        if (beeps_buzzing < 5) {
+      case 48:
+        if (beeps_buzzing >= GOING_NOWHERE) {
+          beeps_buzzing = 0;
+        } else if (beeps_buzzing < 5) {
           beeps_buzzing -= 1;
-          iterations = 30;
+          iterations = 24;
         }
-        noTone(PIN_BUZZER);
         break;
-      case 64:
+      case 58:
         beeps_buzzing -= 5;
-        iterations = 30;
+        iterations = 24;
         break;
     }
   }
@@ -250,19 +296,19 @@ static void report_worst_notice() {
 void loop() {
   delay(LOOP_MILLIS); // save energy & provide timer
   heartbeat();
-  report_worst_notice();
+  quiet_down();
+  buzz_primary_notice();
 
   static byte boost_iterations = 0;
   if (boost_iterations > 0) {
     if (--boost_iterations == 0) {
-      digitalWrite(PIN_DIGITAL_OUT_SPEED, LOW);
+      write_speed(SLOW);
     }
   }
 
   const unsigned long bits = handler.receive();
   if (bits != VOID_BITS) {
     last_good_time = micros();
-    worst_notice = IGNORED_NOTICE; // wipe errors from initial packet(s) in packet train
 
     const Packet packet(bits);
     const bool recognized = transmitterButtonStorage.recognizes(packet);
@@ -271,25 +317,25 @@ void loop() {
       Serial.print(packet.on_or_off() ? "①" : "⓪");
       Serial.println(recognized ? ", hallelujah!" : ", never mind");
     }
-    tone(PIN_BUZZER, NOTE_E5, 20);
     if (recognized) {
       if (packet.on_or_off()) {
         if (boost_iterations > 0) {
           boost_iterations = 0;
-        } else if (digitalRead(PIN_DIGITAL_OUT_POWER) == LOW) {
+        } else if (read_speed() == OFF) {
           boost_iterations = LOOPS_PER_BOOST;
         }
-        digitalWrite(PIN_DIGITAL_OUT_SPEED, HIGH);
-        digitalWrite(PIN_DIGITAL_OUT_POWER, HIGH);
+        write_speed(FAST);
       } else {
-        if (boost_iterations > 0 || digitalRead(PIN_DIGITAL_OUT_SPEED) == LOW) {
-          digitalWrite(PIN_DIGITAL_OUT_POWER, LOW);
+        if (boost_iterations == 0 && read_speed() == FAST) {
+          write_speed(SLOW);
+        } else {
+          write_speed(OFF);
         }
-        digitalWrite(PIN_DIGITAL_OUT_SPEED, LOW);
         boost_iterations = 0;
       }
-      delay(40);
-      tone(PIN_BUZZER, packet.on_or_off() ? NOTE_A6 : NOTE_E4, 60);
+      primary_notice = packet.on_or_off() ? GOING_UP : GOING_DOWN;
+    } else {
+      primary_notice = GOING_NOWHERE; // also wipe errors from initial packet(s) in packet train
     }
   }
 }
