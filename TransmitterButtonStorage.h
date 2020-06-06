@@ -2,38 +2,38 @@
 #include "Packet.h"
 
 class TransmitterButtonStorage {
-    static const byte TRANSMITTER_BUTTONS_STORED = 4;
-    static const unsigned long NONE = ~0ul;
+    static const uint8_t TRANSMITTER_BUTTONS_STORED = 4;
+    static const uint32_t NONE = ~0ul;
 
-    unsigned long transmitter_buttons[TRANSMITTER_BUTTONS_STORED];
-    byte transmitter_button_count = 0;
+    uint32_t transmitter_buttons[TRANSMITTER_BUTTONS_STORED];
+    uint8_t transmitter_button_count = 0;
 
   public:
     void load() {
-      unsigned long* const address = 0;
+      uint32_t* const address = 0;
       for (transmitter_button_count = 0;
            transmitter_button_count < TRANSMITTER_BUTTONS_STORED;
            transmitter_button_count++) {
-        unsigned long tb = transmitter_buttons[transmitter_button_count] = eeprom_read_dword(&address[transmitter_button_count]);
+        uint32_t tb = transmitter_buttons[transmitter_button_count] = eeprom_read_dword(&address[transmitter_button_count]);
         if (tb == NONE) {
           break;
         }
       }
-      for (byte i = transmitter_button_count; i < TRANSMITTER_BUTTONS_STORED; ++i) {
+      for (uint8_t i = transmitter_button_count; i < TRANSMITTER_BUTTONS_STORED; ++i) {
         transmitter_buttons[i] = NONE;
       }
     }
 
-    byte count() const {
+    uint8_t count() const {
       return transmitter_button_count;
     }
 
-    unsigned long get(byte index) const {
+    uint32_t get(uint8_t index) const {
       return transmitter_buttons[index];
     }
 
     bool recognizes(Packet packet) const {
-      for (byte i = 0; i < transmitter_button_count; ++i) {
+      for (uint8_t i = 0; i < transmitter_button_count; ++i) {
         if (packet.matches(transmitter_buttons[i])) {
           return true;
         }
@@ -41,10 +41,10 @@ class TransmitterButtonStorage {
       return false;
     }
 
-    bool remember(unsigned long some_transmitter_button) {
+    bool remember(uint32_t some_transmitter_button) {
       if (!recognizes(Packet(some_transmitter_button))) {
         if (transmitter_button_count == TRANSMITTER_BUTTONS_STORED) {
-          for (byte i = 1; i < TRANSMITTER_BUTTONS_STORED; ++i) {
+          for (uint8_t i = 1; i < TRANSMITTER_BUTTONS_STORED; ++i) {
             transmitter_buttons[i - 1] = transmitter_buttons[i];
           }
           transmitter_button_count -= 1;
@@ -57,10 +57,10 @@ class TransmitterButtonStorage {
       }
     }
 
-    bool forget(unsigned long some_transmitter_button) {
+    bool forget(uint32_t some_transmitter_button) {
       bool found = false;
-      byte old_index = 0;
-      byte new_index = 0;
+      uint8_t old_index = 0;
+      uint8_t new_index = 0;
       while (old_index < transmitter_button_count) {
         if (transmitter_buttons[old_index] == some_transmitter_button) {
           found = true;
@@ -86,8 +86,8 @@ class TransmitterButtonStorage {
     }
 
     void store() {
-      unsigned long* const address = 0;
-      for (byte i = 0; i < TRANSMITTER_BUTTONS_STORED; ++i) {
+      uint32_t* const address = 0;
+      for (uint8_t i = 0; i < TRANSMITTER_BUTTONS_STORED; ++i) {
         eeprom_update_dword(&address[i], transmitter_buttons[i]);
       }
     }

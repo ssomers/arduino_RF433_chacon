@@ -1,38 +1,38 @@
-enum ProtocolNotice : byte { NO_NOTICE,
-                             END_OF_TRAIN,
-                             SPURIOUS_PEAKS,
-                             EXCESS_TOTAL_PEAKS,
-                             PREAMBLE_TOO_SOON = 4, PREAMBLE_TOO_LATE = 5,
-                             MISSING_SOME_PEAKS = 6,
-                             PEAK_TOO_SOON = 7, PEAK_TOO_LATE = 8,
-                             MISSING_ADJACENT_PEAKS = 10, EXCESS_ADJACENT_PEAKS = 11,
-                             MISSING_BITS = 12, EXCESS_BITS = 11,
-                             WRONG_PARITY = 13,
-                             MISSED_PACKET = 14,
-                           };
-static const unsigned long VOID_BITS = ~0ul;
-static const unsigned long TRAIN_TIMEOUT = 0x60000;
+enum ProtocolNotice : uint8_t { NO_NOTICE,
+                                END_OF_TRAIN,
+                                SPURIOUS_PEAKS,
+                                EXCESS_TOTAL_PEAKS,
+                                PREAMBLE_TOO_SOON = 4, PREAMBLE_TOO_LATE = 5,
+                                MISSING_SOME_PEAKS = 6,
+                                PEAK_TOO_SOON = 7, PEAK_TOO_LATE = 8,
+                                MISSING_ADJACENT_PEAKS = 10, EXCESS_ADJACENT_PEAKS = 11,
+                                MISSING_BITS = 12, EXCESS_BITS = 11,
+                                WRONG_PARITY = 13,
+                                MISSED_PACKET = 14,
+                              };
+static const uint32_t VOID_BITS = ~0ul;
+static const uint32_t TRAIN_TIMEOUT = 0x60000;
 
-inline unsigned long duration_from_to(unsigned long early, unsigned long later) {
+inline uint32_t duration_from_to(uint32_t early, uint32_t later) {
   return later - early;
 }
 
 template <typename EventLogger, bool logTiming>
 class ProtocolHandler {
-    static const unsigned long MIN_ADJACENT_PEAK_SPACING = 0x100;
-    static const unsigned long MAX_ADJACENT_PEAK_SPACING = 0x300;
-    static const unsigned long MIN_SEPARATE_PEAK_SPACING = 0x500;
-    static const unsigned long MIN_PACKET_SPACING = 0x2000;
-    static const unsigned long MIN_PACKET_PREAMBLE = 0XA00;
-    static const unsigned long MAX_PACKET_PREAMBLE = 0xD00;
-    static const unsigned long PARITY_TIMEOUT = 3 * MAX_ADJACENT_PEAK_SPACING;
+    static const uint32_t MIN_ADJACENT_PEAK_SPACING = 0x100;
+    static const uint32_t MAX_ADJACENT_PEAK_SPACING = 0x300;
+    static const uint32_t MIN_SEPARATE_PEAK_SPACING = 0x500;
+    static const uint32_t MIN_PACKET_SPACING = 0x2000;
+    static const uint32_t MIN_PACKET_PREAMBLE = 0XA00;
+    static const uint32_t MAX_PACKET_PREAMBLE = 0xD00;
+    static const uint32_t PARITY_TIMEOUT = 3 * MAX_ADJACENT_PEAK_SPACING;
 
     enum { IDLE = 0, DELIMITED = 1, PREAMBLED = 2, FINISHED = 66 };
-    unsigned long peak_micros[FINISHED + 1] { micros() };
-    unsigned long last_probed_micros;
-    unsigned long train_handled = VOID_BITS;
-    unsigned long train_established_micros;
-    byte reception_stage = IDLE;
+    uint32_t peak_micros[FINISHED + 1] { micros() };
+    uint32_t last_probed_micros;
+    uint32_t train_handled = VOID_BITS;
+    uint32_t train_established_micros;
+    uint8_t reception_stage = IDLE;
 
     void cancel_packet() {
       peak_micros[IDLE] = peak_micros[reception_stage];
@@ -50,10 +50,10 @@ class ProtocolHandler {
       }
     }
 
-    void dump_packet(unsigned long now) {
+    void dump_packet(uint32_t now) {
       if (logTiming) {
         Serial.println("Timing:");
-        for (byte i = 0; i <= FINISHED; ++i) {
+        for (uint8_t i = 0; i <= FINISHED; ++i) {
           Serial.print("  ");
           Serial.print(peak_micros[i]);
           Serial.print(" peak ");
@@ -70,8 +70,8 @@ class ProtocolHandler {
 
   public:
     void handleRise() {
-      const unsigned long now = micros();
-      const unsigned long spacing = duration_from_to(peak_micros[reception_stage], now);
+      const uint32_t now = micros();
+      const uint32_t spacing = duration_from_to(peak_micros[reception_stage], now);
       if (spacing >= MIN_PACKET_SPACING) {
         packet_delimited();
         cancel_packet();
@@ -99,7 +99,7 @@ class ProtocolHandler {
 
     bool is_alive() {
       noInterrupts();
-      const unsigned long last_peak_micros = peak_micros[reception_stage];
+      const uint32_t last_peak_micros = peak_micros[reception_stage];
       interrupts();
       if (last_probed_micros != last_peak_micros) {
         last_probed_micros = last_peak_micros;
@@ -110,7 +110,7 @@ class ProtocolHandler {
     }
 
   private:
-    static bool is_valid_preamble(unsigned long preamble_duration) {
+    static bool is_valid_preamble(uint32_t preamble_duration) {
       if (preamble_duration < MIN_PACKET_PREAMBLE) {
         EventLogger::print(PREAMBLE_TOO_SOON, preamble_duration);
         EventLogger::println(PREAMBLE_TOO_SOON, "µs short preamble after delimiter");
@@ -124,12 +124,12 @@ class ProtocolHandler {
       return true;
     }
 
-    unsigned long decode() const {
-      unsigned long bits_received = 0;
-      byte extra_adjacent_peaks = 0;
-      byte bitcount = 0;
-      for (byte s = PREAMBLED; s < FINISHED; ++s) {
-        const unsigned long spacing = duration_from_to(peak_micros[s], peak_micros[s + 1]);
+    uint32_t decode() const {
+      uint32_t bits_received = 0;
+      uint8_t extra_adjacent_peaks = 0;
+      uint8_t bitcount = 0;
+      for (uint8_t s = PREAMBLED; s < FINISHED; ++s) {
+        const uint32_t spacing = duration_from_to(peak_micros[s], peak_micros[s + 1]);
         if (spacing < MIN_SEPARATE_PEAK_SPACING) {
           if (spacing < MIN_ADJACENT_PEAK_SPACING) {
             EventLogger::print(PEAK_TOO_SOON, spacing);
@@ -145,7 +145,7 @@ class ProtocolHandler {
           }
           extra_adjacent_peaks += 1;
         } else {
-          const byte bit = 1 + (bits_received & 1) - extra_adjacent_peaks;
+          const uint8_t bit = 1 + (bits_received & 1) - extra_adjacent_peaks;
           if (bit > 1) {
             if (bit & 0x80) {
               EventLogger::print(EXCESS_ADJACENT_PEAKS, "Too many adjacent peaks at #");
@@ -180,11 +180,11 @@ class ProtocolHandler {
     }
 
   public:
-    unsigned long receive() {
+    uint32_t receive() {
       noInterrupts();
-      const unsigned long now = micros();
-      const unsigned long last_peak = peak_micros[reception_stage];
-      unsigned long bits_received = VOID_BITS;
+      const uint32_t now = micros();
+      const uint32_t last_peak = peak_micros[reception_stage];
+      uint32_t bits_received = VOID_BITS;
       if (reception_stage == FINISHED && duration_from_to(last_peak, now) > PARITY_TIMEOUT) {
         // Keep blocking interrupts while we process the received packet - peaks right now are noise
         dump_packet(now);

@@ -9,14 +9,14 @@ static const bool logTiming = false;
 static const ProtocolNotice MIN_CONSIDERED_NOTICE = EXCESS_TOTAL_PEAKS;
 static const ProtocolNotice LATER_MIN_CONSIDERED_NOTICE = MISSING_ADJACENT_PEAKS;
 
-static const byte PIN_DIGITAL_IN = 2;
-static const byte PIN_DIGITAL_OUT_SLOW = 3;
-static const byte PIN_DIGITAL_OUT_FAST = 4;
-static const unsigned long INITIAL_LEARNING_MILLIS = 4000;
-static const unsigned long INITIAL_CHATTY_MILLIS = 40000;
-static const unsigned long LOOP_MILLIS = 5;
-static const byte LOOPS_PER_BOOST = 250;
-static const byte LOOPS_PER_HEARTBEAT = 190;
+static const uint8_t PIN_DIGITAL_IN = 2;
+static const uint8_t PIN_DIGITAL_OUT_SLOW = 3;
+static const uint8_t PIN_DIGITAL_OUT_FAST = 4;
+static const uint32_t INITIAL_LEARNING_MILLIS = 4000;
+static const uint32_t INITIAL_CHATTY_MILLIS = 40000;
+static const uint32_t LOOP_MILLIS = 5;
+static const uint8_t LOOPS_PER_BOOST = 250;
+static const uint8_t LOOPS_PER_HEARTBEAT = 190;
 
 #ifdef LED_BUILTIN
 /*
@@ -24,15 +24,15 @@ static const byte LOOPS_PER_HEARTBEAT = 190;
   #define QV(V) Q(V)
   #pragma message "\nLED_BUILTIN = " QV(LED_BUILTIN) ";"
 */
-static const byte PIN_BUZZER = 6;
+static const uint8_t PIN_BUZZER = 6;
 static const int INT_IN = digitalPinToInterrupt(PIN_DIGITAL_IN);
 #else
-static const byte PIN_BUZZER = 0;
-static const byte LED_BUILTIN = 1;
+static const uint8_t PIN_BUZZER = 0;
+static const uint8_t LED_BUILTIN = 1;
 static const int INT_IN = 0;
 #endif
 
-enum Speed : byte { OFF, SLOW, FAST };
+enum Speed : uint8_t { OFF, SLOW, FAST };
 
 static void write_speed(Speed speed) {
   if (speed != SLOW) {
@@ -60,12 +60,12 @@ static Speed read_speed() {
 }
 
 
-enum LocalNotice : byte { GOING_NOWHERE = 128, GOING_UP, GOING_DOWN };
+enum LocalNotice : uint8_t { GOING_NOWHERE = 128, GOING_UP, GOING_DOWN };
 
 static ProtocolNotice min_buzzed_notice = MIN_CONSIDERED_NOTICE;
-static byte primary_notice = 0;
-static unsigned long primary_notice_time;
-static unsigned long last_good_time;
+static uint8_t primary_notice = 0;
+static uint32_t primary_notice_time;
+static uint32_t last_good_time;
 
 struct BuzzingEventLogger {
   template <typename T> static void print(ProtocolNotice, T) {}
@@ -114,16 +114,16 @@ static void dump_transmitters_and_buttons(const char* prefix) {
 }
 
 static void initial_learning() {
-  unsigned long restart_millis = millis();
+  uint32_t restart_millis = millis();
 
   transmitterButtonStorage.load();
   if (logEvents) {
     dump_transmitters_and_buttons("Initial");
     Serial.println("Start learning");
   }
-  unsigned long buzz_millis = restart_millis;
+  uint32_t buzz_millis = restart_millis;
   for (;;) {
-    const unsigned long passed_millis = millis();
+    const uint32_t passed_millis = millis();
     if (passed_millis >= restart_millis + INITIAL_LEARNING_MILLIS) {
       break;
     }
@@ -137,12 +137,12 @@ static void initial_learning() {
       buzz_millis += 500;
     }
 
-    const unsigned long bits = handler.receive();
+    const uint32_t bits = handler.receive();
     if (bits != VOID_BITS) {
       const Packet packet(bits);
       bool change;
-      unsigned int freq1;
-      unsigned int freq2;
+      uint16_t freq1;
+      uint16_t freq2;
       if (packet.multicast()) {
         change = !packet.on_or_off();
         freq1 = NOTE_A3;
@@ -184,7 +184,7 @@ static void initial_learning() {
     }
   }
   transmitterButtonStorage.store();
-  for (byte i = transmitterButtonStorage.count(); i > 0; --i) {
+  for (uint8_t i = transmitterButtonStorage.count(); i > 0; --i) {
     digitalWrite(LED_BUILTIN, HIGH);
     tone(PIN_BUZZER, NOTE_A5);
     delay(50);
@@ -220,7 +220,7 @@ void setup() {
 }
 
 static void heartbeat() {
-  static byte iterations = 0;
+  static uint8_t iterations = 0;
   switch (++iterations) {
     case LOOPS_PER_HEARTBEAT - 44:
       if (handler.is_alive()) {
@@ -248,8 +248,8 @@ static void quiet_down() {
 }
 
 static void buzz_primary_notice() {
-  static byte beeps_buzzing = 0;
-  static byte iterations;
+  static uint8_t beeps_buzzing = 0;
+  static uint8_t iterations;
 
   if (primary_notice >= GOING_NOWHERE) {
     beeps_buzzing = primary_notice;
@@ -299,14 +299,14 @@ void loop() {
   quiet_down();
   buzz_primary_notice();
 
-  static byte boost_iterations = 0;
+  static uint8_t boost_iterations = 0;
   if (boost_iterations > 0) {
     if (--boost_iterations == 0) {
       write_speed(SLOW);
     }
   }
 
-  const unsigned long bits = handler.receive();
+  const uint32_t bits = handler.receive();
   if (bits != VOID_BITS) {
     last_good_time = micros();
 

@@ -1,10 +1,10 @@
 class Packet {
-    const unsigned long bits;
+    const uint32_t bits;
 
   public:
-    explicit Packet(unsigned long bits) : bits(bits) {}
+    explicit Packet(uint32_t bits) : bits(bits) {}
 
-    bool matches(unsigned long some_transmitter_and_button) const {
+    bool matches(uint32_t some_transmitter_and_button) const {
       if (multicast()) {
         return transmitter() == (some_transmitter_and_button >> 6);
       } else {
@@ -12,11 +12,11 @@ class Packet {
       }
     }
 
-    unsigned long transmitter() const {
+    uint32_t transmitter() const {
       return bits >> 6;
     }
 
-    unsigned long transmitter_and_button() const {
+    uint32_t transmitter_and_button() const {
       return bits & ~(1 << 5 | 1 << 4);
     }
 
@@ -28,11 +28,11 @@ class Packet {
       return (bits >> 4) & 1;
     }
 
-    byte page() const {
+    uint8_t page() const {
       return (bits >> 2) & 3;
     }
 
-    byte row() const {
+    uint8_t row() const {
       return bits & 3;
     }
 };
