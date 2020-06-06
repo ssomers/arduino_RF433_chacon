@@ -6,17 +6,17 @@
 
 static const bool logEvents = false;
 static const bool logTiming = false;
-static const ProtocolNotice MIN_CONSIDERED_NOTICE = EXCESS_TOTAL_PEAKS;
-static const ProtocolNotice LATER_MIN_CONSIDERED_NOTICE = MISSING_ADJACENT_PEAKS;
+static const ProtocolNotice MIN_CONSIDERED_NOTICE = INVALID_PREAMBLE;
+static const ProtocolNotice MIN_CONSIDERED_NOTICE_LATER = MISSING_BITS;
 
 static const uint8_t PIN_DIGITAL_IN = 2;
 static const uint8_t PIN_DIGITAL_OUT_SLOW = 3;
 static const uint8_t PIN_DIGITAL_OUT_FAST = 4;
 static const uint32_t INITIAL_LEARNING_MILLIS = 4000;
-static const uint32_t INITIAL_CHATTY_MILLIS = 40000;
-static const uint32_t LOOP_MILLIS = 5;
-static const uint8_t LOOPS_PER_BOOST = 250;
-static const uint8_t LOOPS_PER_HEARTBEAT = 190;
+static const uint32_t INITIAL_CHATTY_MILLIS = 10000;
+static const uint32_t LOOP_MILLIS = 50;
+static const uint8_t LOOPS_PER_BOOST = 25;
+static const uint8_t LOOPS_PER_HEARTBEAT = 20;
 
 #ifdef LED_BUILTIN
 /*
@@ -35,18 +35,11 @@ static const int INT_IN = 0;
 enum Speed : uint8_t { OFF, SLOW, FAST };
 
 static void write_speed(Speed speed) {
-  if (speed != SLOW) {
-    digitalWrite(PIN_DIGITAL_OUT_SLOW, LOW);
-  }
-  if (speed != FAST) {
-    digitalWrite(PIN_DIGITAL_OUT_FAST, LOW);
-  }
-  if (speed == SLOW) {
-    digitalWrite(PIN_DIGITAL_OUT_SLOW, HIGH);
-  }
-  if (speed == FAST) {
-    digitalWrite(PIN_DIGITAL_OUT_FAST, HIGH);
-  }
+  // Make sure that at no point both output pins are high
+  if (speed != SLOW) digitalWrite(PIN_DIGITAL_OUT_SLOW, LOW);
+  if (speed != FAST) digitalWrite(PIN_DIGITAL_OUT_FAST, LOW);
+  if (speed == SLOW) digitalWrite(PIN_DIGITAL_OUT_SLOW, HIGH);
+  if (speed == FAST) digitalWrite(PIN_DIGITAL_OUT_FAST, HIGH);
 }
 
 static Speed read_speed() {
@@ -60,7 +53,7 @@ static Speed read_speed() {
 }
 
 
-enum LocalNotice : uint8_t { GOING_NOWHERE = 128, GOING_UP, GOING_DOWN };
+enum LocalNotice : uint8_t { SHUTTING_UP = 128, GOING_NOWHERE, GOING_UP, GOING_DOWN };
 
 static ProtocolNotice min_buzzed_notice = MIN_CONSIDERED_NOTICE;
 static uint8_t primary_notice = 0;
@@ -222,15 +215,15 @@ void setup() {
 static void heartbeat() {
   static uint8_t iterations = 0;
   switch (++iterations) {
-    case LOOPS_PER_HEARTBEAT - 44:
+    case LOOPS_PER_HEARTBEAT - 5:
       if (handler.is_alive()) {
         digitalWrite(LED_BUILTIN, HIGH);
       }
       break;
-    case LOOPS_PER_HEARTBEAT - 40:
+    case LOOPS_PER_HEARTBEAT - 4:
       digitalWrite(LED_BUILTIN, LOW);
       break;
-    case LOOPS_PER_HEARTBEAT - 4:
+    case LOOPS_PER_HEARTBEAT - 1:
       digitalWrite(LED_BUILTIN, HIGH);
       break;
     case LOOPS_PER_HEARTBEAT - 0:
@@ -240,9 +233,12 @@ static void heartbeat() {
 }
 
 static void quiet_down() {
-  if (min_buzzed_notice != LATER_MIN_CONSIDERED_NOTICE) {
+  if (min_buzzed_notice != MIN_CONSIDERED_NOTICE_LATER) {
     if (millis() > INITIAL_CHATTY_MILLIS) {
-      min_buzzed_notice = LATER_MIN_CONSIDERED_NOTICE;
+      min_buzzed_notice = MIN_CONSIDERED_NOTICE_LATER;
+      if (primary_notice < SHUTTING_UP) {
+        primary_notice = SHUTTING_UP;
+      }
     }
   }
 }
@@ -251,15 +247,15 @@ static void buzz_primary_notice() {
   static uint8_t beeps_buzzing = 0;
   static uint8_t iterations;
 
-  if (primary_notice >= GOING_NOWHERE) {
+  if (primary_notice >= SHUTTING_UP) {
     beeps_buzzing = primary_notice;
-    primary_notice = NO_NOTICE;
+    primary_notice = 0;
     iterations = 0;
   } else if (beeps_buzzing == 0 && primary_notice >= min_buzzed_notice) {
     // postpone notice until we're sure it isn't going to be cancelled by a properly received packet
     if (duration_from_to(primary_notice_time, micros()) > TRAIN_TIMEOUT) {
       beeps_buzzing = primary_notice;
-      primary_notice = NO_NOTICE;
+      primary_notice = 0;
       iterations = 0;
     }
   }
@@ -268,33 +264,34 @@ static void buzz_primary_notice() {
     switch (++iterations) {
       case 1:
         tone(PIN_BUZZER,
-             beeps_buzzing >= GOING_NOWHERE ? NOTE_E5 : NOTE_A2, 80);
+             beeps_buzzing >= SHUTTING_UP ? NOTE_E5 : NOTE_A2, 80);
         break;
-      case 25:
+      case 3:
         tone(PIN_BUZZER,
+             beeps_buzzing == SHUTTING_UP ? NOTE_A6 :
              beeps_buzzing == GOING_NOWHERE ? NOTE_E5 :
-             beeps_buzzing == GOING_UP ? NOTE_A6 :
-             beeps_buzzing == GOING_DOWN ? NOTE_E4 : NOTE_E3,
-             beeps_buzzing < 5 ? 25 : 75);
+             beeps_buzzing == GOING_UP ? NOTE_A5 :
+             beeps_buzzing == GOING_DOWN ? NOTE_A4 : NOTE_E3,
+             beeps_buzzing < 5 ? 25 : 100);
         break;
-      case 48:
-        if (beeps_buzzing >= GOING_NOWHERE) {
+      case 5:
+        if (beeps_buzzing >= SHUTTING_UP) {
           beeps_buzzing = 0;
         } else if (beeps_buzzing < 5) {
           beeps_buzzing -= 1;
-          iterations = 24;
+          iterations = 2;
         }
         break;
-      case 58:
+      case 6:
         beeps_buzzing -= 5;
-        iterations = 24;
+        iterations = 2;
         break;
     }
   }
 }
 
 void loop() {
-  delay(LOOP_MILLIS); // save energy & provide timer
+  delay(LOOP_MILLIS); // save energy & provide good enough intervals
   heartbeat();
   quiet_down();
   buzz_primary_notice();

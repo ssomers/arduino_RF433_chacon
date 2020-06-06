@@ -1,14 +1,12 @@
-enum ProtocolNotice : uint8_t { NO_NOTICE,
-                                END_OF_TRAIN,
-                                SPURIOUS_PEAKS,
-                                EXCESS_TOTAL_PEAKS,
-                                PREAMBLE_TOO_SOON = 4, PREAMBLE_TOO_LATE = 5,
-                                MISSING_SOME_PEAKS = 6,
-                                PEAK_TOO_SOON = 7, PEAK_TOO_LATE = 8,
-                                MISSING_ADJACENT_PEAKS = 10, EXCESS_ADJACENT_PEAKS = 11,
-                                MISSING_BITS = 12, EXCESS_BITS = 11,
-                                WRONG_PARITY = 13,
-                                MISSED_PACKET = 14,
+enum ProtocolNotice : uint8_t { END_OF_TRAIN,
+                                SPURIOUS_PEAKS = 1,
+                                INVALID_PREAMBLE = 2,
+                                MISSING_SOME_PEAKS = 3,
+                                EXCESS_TOTAL_PEAKS = 4,
+                                WRONG_PEAK_SPACING = 5, WRONG_PEAK_COUNT = 6,
+                                MISSING_BITS = 7, EXCESS_BITS = 8,
+                                WRONG_PARITY = 9,
+                                MISSED_PACKET = 10, DIRTY_BUFFER = 11,
                               };
 static const uint32_t VOID_BITS = ~0ul;
 static const uint32_t TRAIN_TIMEOUT = 0x60000;
@@ -17,89 +15,170 @@ inline uint32_t duration_from_to(uint32_t early, uint32_t later) {
   return later - early;
 }
 
+template <typename T>
+inline T increment_modulo(T old, T limit) {
+  return old + 1 < limit ? old + 1 : 0;
+}
+
 template <typename EventLogger, bool logTiming>
 class ProtocolHandler {
-    static const uint32_t MIN_ADJACENT_PEAK_SPACING = 0x100;
-    static const uint32_t MAX_ADJACENT_PEAK_SPACING = 0x300;
-    static const uint32_t MIN_SEPARATE_PEAK_SPACING = 0x500;
-    static const uint32_t MIN_PACKET_SPACING = 0x2000;
-    static const uint32_t MIN_PACKET_PREAMBLE = 0XA00;
-    static const uint32_t MAX_PACKET_PREAMBLE = 0xD00;
-    static const uint32_t PARITY_TIMEOUT = 3 * MAX_ADJACENT_PEAK_SPACING;
+    static const uint8_t MIN_ADJACENT_PEAK_SPACING = 10; // unit = 32 µs
+    static const uint8_t MAX_ADJACENT_PEAK_SPACING = 20; // unit = 32 µs
+    static const uint8_t MIN_SEPARATE_PEAK_SPACING = 40; // unit = 32 µs
+    static const uint8_t MIN_PACKET_PREAMBLE       = 80; // unit = 32 µs
+    static const uint8_t MAX_PACKET_PREAMBLE      = 100; // unit = 32 µs
+    static const uint32_t MIN_PACKET_SPACING = 0x100 * 32; // unit = µs
+    static const uint32_t PARITY_TIMEOUT = 3 * MAX_ADJACENT_PEAK_SPACING; // unit = µs
 
-    enum { IDLE = 0, DELIMITED = 1, PREAMBLED = 2, FINISHED = 66 };
-    uint32_t peak_micros[FINISHED + 1] { micros() };
+    enum { IDLE, DELIMITED, PREAMBLED, STARTED, FINISHED = PREAMBLED + 64 };
+    enum { RECORDING = PREAMBLED };
+    enum { IGNORED = 48 }; // completely ignore "packets" going no further than this
+    typedef uint8_t PacketPeakTiming [FINISHED - RECORDING + 1]; // unit = 8 µs
+    struct Reception {
+      uint32_t last_rise_micros;
+      PacketPeakTiming peak_32micros;
+      uint8_t reception_stage = IDLE;
+
+      uint32_t decode() const {
+        uint32_t bits_received = 0;
+        uint8_t extra_adjacent_peaks = 0;
+        uint8_t bitcount = 0;
+        uint8_t spacing_errors = 0;
+        uint8_t bit_errors = 0;
+
+        const uint8_t spacing_32micros = peak_32micros[PREAMBLED - RECORDING];
+        if (!is_valid_preamble(spacing_32micros)) {
+          return VOID_BITS;
+        }
+
+        for (uint8_t s = STARTED; s <= FINISHED; ++s) {
+          const uint8_t spacing_32micros = peak_32micros[s - RECORDING];
+          if (spacing_32micros < MIN_SEPARATE_PEAK_SPACING) {
+            spacing_errors += (spacing_32micros < MIN_ADJACENT_PEAK_SPACING);
+            spacing_errors += (spacing_32micros > MAX_ADJACENT_PEAK_SPACING);
+            extra_adjacent_peaks += 1;
+          } else {
+            const uint8_t bit = 1 + (bits_received & 1) - extra_adjacent_peaks;
+            bit_errors += (bit > 1);
+            bits_received = (bits_received << 1) | (bit & 1);
+            bitcount += 1;
+            extra_adjacent_peaks = 0;
+          }
+        }
+        if (spacing_errors) {
+          EventLogger::println(WRONG_PEAK_SPACING, "Peak spacing wildly out of whack");
+          return VOID_BITS;
+        }
+        if (bit_errors) {
+          EventLogger::println(WRONG_PEAK_COUNT, "Wrong number of adjacent peaks");
+          return VOID_BITS;
+        }
+        if (bitcount < 32) {
+          EventLogger::print(MISSING_BITS, "#bits=");
+          EventLogger::println(MISSING_BITS, bitcount);
+          return VOID_BITS;
+        }
+        if (bitcount > 32) {
+          EventLogger::print(EXCESS_BITS, "#bits=");
+          EventLogger::println(EXCESS_BITS, bitcount);
+          return VOID_BITS;
+        }
+        if (extra_adjacent_peaks != (bits_received & 1)) {
+          EventLogger::print(WRONG_PARITY, "Incorrect #parity peaks ");
+          EventLogger::println(WRONG_PARITY, 1 + extra_adjacent_peaks);
+          return VOID_BITS;
+        }
+        return bits_received;
+      }
+
+      void dump(uint32_t now) const {
+        if (logTiming) {
+          Serial.println("Timing:");
+          for (uint8_t i = RECORDING; i < reception_stage; ++i) {
+            Serial.print("  -");
+            Serial.print(peak_32micros[i - RECORDING] * 32);
+            Serial.print(" peak ");
+            Serial.println(i - PREAMBLED);
+          }
+          Serial.print("  ");
+          Serial.print(last_rise_micros);
+          Serial.println(" last peak");
+          Serial.print("  ");
+          Serial.print(now);
+          Serial.println(" receiving");
+          Serial.print("  ");
+          Serial.print(micros());
+          Serial.println(" finishing this debug output");
+        }
+      }
+    };
+    static const uint8_t RECEPTION_BUFFERS = 4;
+    Reception buffers[RECEPTION_BUFFERS];
     uint32_t last_probed_micros;
     uint32_t train_handled = VOID_BITS;
     uint32_t train_established_micros;
-    uint8_t reception_stage = IDLE;
+    volatile uint8_t current_buffer_incoming = 0;
+    uint8_t buffer_receiving = 0;
 
-    void cancel_packet() {
-      peak_micros[IDLE] = peak_micros[reception_stage];
-      reception_stage = IDLE;
-    }
-
-    void packet_delimited() {
-      if (reception_stage == FINISHED) {
-        EventLogger::println(MISSED_PACKET, "Packet received but missed by main loop");
-      } else if (reception_stage >= FINISHED - 22) {
-        EventLogger::println(MISSING_SOME_PEAKS, "Missing some peaks");
-      } else if (reception_stage > DELIMITED) {
-        EventLogger::print(SPURIOUS_PEAKS, "Invalid peak count ");
-        EventLogger::println(SPURIOUS_PEAKS, reception_stage);
+    void finish_packet(uint8_t buffer_incoming) {
+      const uint8_t next_buffer_incoming = increment_modulo(buffer_incoming, RECEPTION_BUFFERS);
+      if (buffers[next_buffer_incoming].reception_stage != IDLE) { // not marked as seen
+        EventLogger::println(DIRTY_BUFFER, "Received packet not cleared");
+        buffers[next_buffer_incoming].reception_stage = IDLE;
       }
+      buffers[next_buffer_incoming].last_rise_micros = buffers[buffer_incoming].last_rise_micros;
+      current_buffer_incoming = next_buffer_incoming;
     }
 
-    void dump_packet(uint32_t now) {
-      if (logTiming) {
-        Serial.println("Timing:");
-        for (uint8_t i = 0; i <= FINISHED; ++i) {
-          Serial.print("  ");
-          Serial.print(peak_micros[i]);
-          Serial.print(" peak ");
-          Serial.println(i);
-        }
-        Serial.print("  ");
-        Serial.print(now);
-        Serial.println(" receiving");
-        Serial.print("  ");
-        Serial.print(micros());
-        Serial.println(" finishing this debug output");
+    static bool is_valid_preamble(uint16_t preamble_duration_32micros) {
+      if (preamble_duration_32micros < MIN_PACKET_PREAMBLE || preamble_duration_32micros > MAX_PACKET_PREAMBLE) {
+        EventLogger::print(INVALID_PREAMBLE, preamble_duration_32micros * 32);
+        EventLogger::println(INVALID_PREAMBLE, "µs preamble after delimiter");
+        return false;
+      } else {
+        return true;
       }
     }
 
   public:
+    ProtocolHandler() {
+      buffers[0].last_rise_micros = micros();
+    }
+
     void handleRise() {
       const uint32_t now = micros();
-      const uint32_t spacing = duration_from_to(peak_micros[reception_stage], now);
+      const uint8_t buffer_incoming = current_buffer_incoming;
+      const uint32_t spacing = duration_from_to(buffers[buffer_incoming].last_rise_micros, now);
+      const uint8_t prev_reception_stage = buffers[buffer_incoming].reception_stage;
+      uint8_t next_buffer_incoming = buffer_incoming;
+      uint8_t next_reception_stage;
       if (spacing >= MIN_PACKET_SPACING) {
-        packet_delimited();
-        cancel_packet();
-        reception_stage = DELIMITED;
-      } else switch (reception_stage) {
-          case IDLE:
-            break;
-          case DELIMITED:
-            if (is_valid_preamble(spacing)) {
-              reception_stage = PREAMBLED;
-            } else {
-              reception_stage = IDLE;
-            }
-            break;
-          case FINISHED:
-            EventLogger::println(EXCESS_TOTAL_PEAKS, "Too many peaks in a packet");
-            dump_packet(now);
-            reception_stage = IDLE;
-            break;
-          default:
-            ++reception_stage;
-        };
-      peak_micros[reception_stage] = now;
+        if (prev_reception_stage > IGNORED) {
+          next_buffer_incoming = increment_modulo(buffer_incoming, RECEPTION_BUFFERS);
+          if (buffers[next_buffer_incoming].reception_stage != IDLE) { // not marked as seen
+            EventLogger::println(MISSED_PACKET, "Packet not timely processed by main loop");
+          }
+        }
+        next_reception_stage = DELIMITED;
+      } else if (prev_reception_stage == IDLE) {
+        next_reception_stage = IDLE;
+      } else if (prev_reception_stage < FINISHED) {
+        next_reception_stage = prev_reception_stage + 1;
+        buffers[next_buffer_incoming].peak_32micros[next_reception_stage - RECORDING] = uint8_t(spacing / 32);
+      } else {
+        EventLogger::println(EXCESS_TOTAL_PEAKS, "Too many peaks in a packet");
+        buffers[buffer_incoming].dump(now);
+        next_reception_stage = IDLE;
+      }
+
+      current_buffer_incoming = next_buffer_incoming;
+      buffers[next_buffer_incoming].reception_stage = next_reception_stage;
+      buffers[next_buffer_incoming].last_rise_micros = now;
     }
 
     bool is_alive() {
       noInterrupts();
-      const uint32_t last_peak_micros = peak_micros[reception_stage];
+      const uint32_t last_peak_micros = buffers[current_buffer_incoming].last_rise_micros;
       interrupts();
       if (last_probed_micros != last_peak_micros) {
         last_probed_micros = last_peak_micros;
@@ -110,92 +189,54 @@ class ProtocolHandler {
     }
 
   private:
-    static bool is_valid_preamble(uint32_t preamble_duration) {
-      if (preamble_duration < MIN_PACKET_PREAMBLE) {
-        EventLogger::print(PREAMBLE_TOO_SOON, preamble_duration);
-        EventLogger::println(PREAMBLE_TOO_SOON, "µs short preamble after delimiter");
-        return false;
-      }
-      if (preamble_duration > MAX_PACKET_PREAMBLE) {
-        EventLogger::print(PREAMBLE_TOO_LATE, preamble_duration);
-        EventLogger::println(PREAMBLE_TOO_LATE, "µs long preamble after delimiter");
-        return false;
-      }
-      return true;
-    }
-
-    uint32_t decode() const {
-      uint32_t bits_received = 0;
-      uint8_t extra_adjacent_peaks = 0;
-      uint8_t bitcount = 0;
-      for (uint8_t s = PREAMBLED; s < FINISHED; ++s) {
-        const uint32_t spacing = duration_from_to(peak_micros[s], peak_micros[s + 1]);
-        if (spacing < MIN_SEPARATE_PEAK_SPACING) {
-          if (spacing < MIN_ADJACENT_PEAK_SPACING) {
-            EventLogger::print(PEAK_TOO_SOON, spacing);
-            EventLogger::print(PEAK_TOO_SOON, "µs peak #");
-            EventLogger::println(PEAK_TOO_SOON, s);
-            return VOID_BITS;
-          }
-          if (spacing > MAX_ADJACENT_PEAK_SPACING) {
-            EventLogger::print(PEAK_TOO_LATE, spacing);
-            EventLogger::print(PEAK_TOO_LATE, "µs peak #");
-            EventLogger::println(PEAK_TOO_LATE, s);
-            return VOID_BITS;
-          }
-          extra_adjacent_peaks += 1;
-        } else {
-          const uint8_t bit = 1 + (bits_received & 1) - extra_adjacent_peaks;
-          if (bit > 1) {
-            if (bit & 0x80) {
-              EventLogger::print(EXCESS_ADJACENT_PEAKS, "Too many adjacent peaks at #");
-              EventLogger::println(EXCESS_ADJACENT_PEAKS, s);
-            } else {
-              EventLogger::print(MISSING_ADJACENT_PEAKS, "Too few adjacent peaks at #");
-              EventLogger::println(MISSING_ADJACENT_PEAKS, s);
-            }
-            return VOID_BITS;
-          }
-          bits_received = (bits_received << 1) | bit;
-          bitcount += 1;
-          extra_adjacent_peaks = 0;
-        }
-      }
-      if (bitcount < 32) {
-        EventLogger::print(MISSING_BITS, "#bits=");
-        EventLogger::println(MISSING_BITS, bitcount);
-        return VOID_BITS;
-      }
-      if (bitcount > 32) {
-        EventLogger::print(EXCESS_BITS, "#bits=");
-        EventLogger::println(EXCESS_BITS, bitcount);
-        return VOID_BITS;
-      }
-      if (extra_adjacent_peaks != (bits_received & 1)) {
-        EventLogger::print(WRONG_PARITY, "Incorrect #parity peaks ");
-        EventLogger::println(WRONG_PARITY, 1 + extra_adjacent_peaks);
-        return VOID_BITS;
-      }
-      return bits_received;
-    }
-
-  public:
-    uint32_t receive() {
-      noInterrupts();
-      const uint32_t now = micros();
-      const uint32_t last_peak = peak_micros[reception_stage];
-      uint32_t bits_received = VOID_BITS;
-      if (reception_stage == FINISHED && duration_from_to(last_peak, now) > PARITY_TIMEOUT) {
-        // Keep blocking interrupts while we process the received packet - peaks right now are noise
-        dump_packet(now);
-        bits_received = decode();
-        cancel_packet();
-      }
-      interrupts();
+    bool process_buffer(Reception const& buffer, uint32_t now) {
+      buffer.dump(now);
+      const uint32_t bits_received = buffer.decode();
       if (bits_received != VOID_BITS) {
         if (bits_received != train_handled) { // not just a repeat in the same train
           train_handled = bits_received;
-          train_established_micros = last_peak;
+          train_established_micros = buffer.last_rise_micros;
+          return true;
+        }
+      }
+      return false;
+    }
+
+
+  public:
+    uint32_t receive() {
+      const uint32_t now = micros();
+      noInterrupts();
+      while (buffer_receiving != current_buffer_incoming) {
+        interrupts();
+        Reception& buffer = buffers[buffer_receiving];
+        bool new_train = false;
+        if (buffer.reception_stage == FINISHED) {
+          new_train = process_buffer(buffer, now);
+        } else if (buffer.reception_stage >= FINISHED - 2) {
+          EventLogger::println(MISSING_SOME_PEAKS, "Missing some peaks");
+        } else {
+          EventLogger::print(SPURIOUS_PEAKS, "Invalid peak count ");
+          EventLogger::println(SPURIOUS_PEAKS, buffer.reception_stage);
+        }
+        buffer.reception_stage = IDLE; // mark as seen
+        if (new_train) {
+          return train_handled;
+        }
+        buffer_receiving = increment_modulo(buffer_receiving, RECEPTION_BUFFERS);
+        noInterrupts();
+      }
+
+      Reception& buffer = buffers[buffer_receiving];
+      const bool buffer_is_finished = buffer.reception_stage == FINISHED && duration_from_to(buffer.last_rise_micros, now) > PARITY_TIMEOUT;
+      if (buffer_is_finished) {
+        finish_packet(buffer_receiving);
+      }
+      interrupts();
+      if (buffer_is_finished) {
+        const bool new_train = process_buffer(buffer, now);
+        buffer.reception_stage = IDLE; // mark as seen
+        if (new_train) {
           return train_handled;
         }
       }
