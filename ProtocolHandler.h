@@ -22,35 +22,42 @@ inline T increment_modulo(T old, T limit) {
 
 template <typename EventLogger, bool logTiming>
 class ProtocolHandler {
-    static const uint8_t MIN_ADJACENT_PEAK_SPACING = 10; // unit = 32 µs
-    static const uint8_t MAX_ADJACENT_PEAK_SPACING = 20; // unit = 32 µs
-    static const uint8_t MIN_SEPARATE_PEAK_SPACING = 40; // unit = 32 µs
-    static const uint8_t MIN_PACKET_PREAMBLE       = 80; // unit = 32 µs
-    static const uint8_t MAX_PACKET_PREAMBLE      = 100; // unit = 32 µs
-    static const uint32_t MIN_PACKET_SPACING = 0x100 * 32; // unit = µs
+    static const uint8_t SCALING = 32; // enough to fit MIN_PACKET_SPACING / SCALING into a byte
+    static const uint8_t MIN_ADJACENT_PEAK_SPACING = 10; // unit = SCALING µs
+    static const uint8_t MAX_ADJACENT_PEAK_SPACING = 20; // unit = SCALING µs
+    static const uint8_t MIN_SEPARATE_PEAK_SPACING = 40; // unit = SCALING µs
+    static const uint8_t MIN_PACKET_PREAMBLE       = 80; // unit = SCALING µs
+    static const uint8_t MAX_PACKET_PREAMBLE      = 100; // unit = SCALING µs
+    static const uint32_t MIN_PACKET_SPACING = 0x100 * SCALING; // unit = µs
     static const uint32_t PARITY_TIMEOUT = 3 * MAX_ADJACENT_PEAK_SPACING; // unit = µs
 
     enum { IDLE, DELIMITED, PREAMBLED, STARTED, FINISHED = PREAMBLED + 64 };
     enum { RECORDING = PREAMBLED };
     enum { IGNORED = 48 }; // completely ignore "packets" going no further than this
-    typedef uint8_t PacketPeakTiming [FINISHED - RECORDING + 1]; // unit = 8 µs
+
+    struct Packet {
+      uint32_t bits_received;
+      uint32_t time_received;
+    };
+
     struct Reception {
       uint32_t last_rise_micros;
-      PacketPeakTiming peak_32micros;
       uint8_t reception_stage = IDLE;
+      uint8_t peak_32micros[FINISHED - RECORDING + 1]; // unit = SCALING µs
 
-      uint32_t decode() const {
-        uint32_t bits_received = 0;
+      bool decode(Packet& packet) const {
         uint8_t extra_adjacent_peaks = 0;
         uint8_t bitcount = 0;
         uint8_t spacing_errors = 0;
         uint8_t bit_errors = 0;
 
         const uint8_t spacing_32micros = peak_32micros[PREAMBLED - RECORDING];
-        if (!is_valid_preamble(spacing_32micros)) {
-          return VOID_BITS;
+        if (!validate_preamble(spacing_32micros)) {
+          return false;
         }
 
+        packet.bits_received = 0;
+        packet.time_received = last_rise_micros;
         for (uint8_t s = STARTED; s <= FINISHED; ++s) {
           const uint8_t spacing_32micros = peak_32micros[s - RECORDING];
           if (spacing_32micros < MIN_SEPARATE_PEAK_SPACING) {
@@ -58,37 +65,37 @@ class ProtocolHandler {
             spacing_errors += (spacing_32micros > MAX_ADJACENT_PEAK_SPACING);
             extra_adjacent_peaks += 1;
           } else {
-            const uint8_t bit = 1 + (bits_received & 1) - extra_adjacent_peaks;
+            const uint8_t bit = 1 + (packet.bits_received & 1) - extra_adjacent_peaks;
             bit_errors += (bit > 1);
-            bits_received = (bits_received << 1) | (bit & 1);
+            packet.bits_received = (packet.bits_received << 1) | (bit & 1);
             bitcount += 1;
             extra_adjacent_peaks = 0;
           }
         }
         if (spacing_errors) {
           EventLogger::println(WRONG_PEAK_SPACING, "Peak spacing wildly out of whack");
-          return VOID_BITS;
+          return false;
         }
         if (bit_errors) {
           EventLogger::println(WRONG_PEAK_COUNT, "Wrong number of adjacent peaks");
-          return VOID_BITS;
+          return false;
         }
         if (bitcount < 32) {
           EventLogger::print(MISSING_BITS, "#bits=");
           EventLogger::println(MISSING_BITS, bitcount);
-          return VOID_BITS;
+          return false;
         }
         if (bitcount > 32) {
           EventLogger::print(EXCESS_BITS, "#bits=");
           EventLogger::println(EXCESS_BITS, bitcount);
-          return VOID_BITS;
+          return false;
         }
-        if (extra_adjacent_peaks != (bits_received & 1)) {
+        if (extra_adjacent_peaks != (packet.bits_received & 1)) {
           EventLogger::print(WRONG_PARITY, "Incorrect #parity peaks ");
           EventLogger::println(WRONG_PARITY, 1 + extra_adjacent_peaks);
-          return VOID_BITS;
+          return false;
         }
-        return bits_received;
+        return true;
       }
 
       void dump(uint32_t now) const {
@@ -96,7 +103,7 @@ class ProtocolHandler {
           Serial.println("Timing:");
           for (uint8_t i = RECORDING; i < reception_stage; ++i) {
             Serial.print("  -");
-            Serial.print(peak_32micros[i - RECORDING] * 32);
+            Serial.print(peak_32micros[i - RECORDING] * SCALING);
             Serial.print(" peak ");
             Serial.println(i - PREAMBLED);
           }
@@ -112,6 +119,7 @@ class ProtocolHandler {
         }
       }
     };
+
     static const uint8_t RECEPTION_BUFFERS = 4;
     Reception buffers[RECEPTION_BUFFERS];
     uint32_t last_probed_micros;
@@ -130,9 +138,9 @@ class ProtocolHandler {
       current_buffer_incoming = next_buffer_incoming;
     }
 
-    static bool is_valid_preamble(uint16_t preamble_duration_32micros) {
+    static bool validate_preamble(uint16_t preamble_duration_32micros) {
       if (preamble_duration_32micros < MIN_PACKET_PREAMBLE || preamble_duration_32micros > MAX_PACKET_PREAMBLE) {
-        EventLogger::print(INVALID_PREAMBLE, preamble_duration_32micros * 32);
+        EventLogger::print(INVALID_PREAMBLE, preamble_duration_32micros * SCALING);
         EventLogger::println(INVALID_PREAMBLE, "µs preamble after delimiter");
         return false;
       } else {
@@ -164,7 +172,7 @@ class ProtocolHandler {
         next_reception_stage = IDLE;
       } else if (prev_reception_stage < FINISHED) {
         next_reception_stage = prev_reception_stage + 1;
-        buffers[next_buffer_incoming].peak_32micros[next_reception_stage - RECORDING] = uint8_t(spacing / 32);
+        buffers[next_buffer_incoming].peak_32micros[next_reception_stage - RECORDING] = uint8_t(uint16_t(spacing) / SCALING);
       } else {
         EventLogger::println(EXCESS_TOTAL_PEAKS, "Too many peaks in a packet");
         buffers[buffer_incoming].dump(now);
@@ -189,30 +197,17 @@ class ProtocolHandler {
     }
 
   private:
-    bool process_buffer(Reception const& buffer, uint32_t now) {
-      buffer.dump(now);
-      const uint32_t bits_received = buffer.decode();
-      if (bits_received != VOID_BITS) {
-        if (bits_received != train_handled) { // not just a repeat in the same train
-          train_handled = bits_received;
-          train_established_micros = buffer.last_rise_micros;
-          return true;
-        }
-      }
-      return false;
-    }
-
-
-  public:
-    uint32_t receive() {
-      const uint32_t now = micros();
+    enum PacketSummary { NOTHING, NOISE, NEWS };
+    PacketSummary catch_up_one(const uint32_t now, Packet& news) {
       noInterrupts();
-      while (buffer_receiving != current_buffer_incoming) {
+      Reception& buffer = buffers[buffer_receiving];
+      if (buffer_receiving != current_buffer_incoming) {
         interrupts();
-        Reception& buffer = buffers[buffer_receiving];
-        bool new_train = false;
+
+        bool success = false;
         if (buffer.reception_stage == FINISHED) {
-          new_train = process_buffer(buffer, now);
+          buffer.dump(now);
+          success = buffer.decode(news);
         } else if (buffer.reception_stage >= FINISHED - 2) {
           EventLogger::println(MISSING_SOME_PEAKS, "Missing some peaks");
         } else {
@@ -220,32 +215,44 @@ class ProtocolHandler {
           EventLogger::println(SPURIOUS_PEAKS, buffer.reception_stage);
         }
         buffer.reception_stage = IDLE; // mark as seen
-        if (new_train) {
-          return train_handled;
-        }
         buffer_receiving = increment_modulo(buffer_receiving, RECEPTION_BUFFERS);
-        noInterrupts();
-      }
-
-      Reception& buffer = buffers[buffer_receiving];
-      const bool buffer_is_finished = buffer.reception_stage == FINISHED && duration_from_to(buffer.last_rise_micros, now) > PARITY_TIMEOUT;
-      if (buffer_is_finished) {
+        return success ? NEWS : NOISE;
+      } else if (buffer.reception_stage == FINISHED && duration_from_to(buffer.last_rise_micros, now) > PARITY_TIMEOUT) {
         finish_packet(buffer_receiving);
-      }
-      interrupts();
-      if (buffer_is_finished) {
-        const bool new_train = process_buffer(buffer, now);
+        interrupts();
+
+        buffer.dump(now);
+        const bool success = buffer.decode(news);
         buffer.reception_stage = IDLE; // mark as seen
-        if (new_train) {
-          return train_handled;
+        return success ? NEWS : NOISE;
+      } else {
+        interrupts();
+        return NOTHING;
+      }
+    }
+
+  public:
+    uint32_t receive() {
+      for (;;) {
+        const uint32_t now = micros();
+        Packet news;
+        switch (catch_up_one(now, news)) {
+          case NOTHING:
+            if (duration_from_to(train_established_micros, now) > TRAIN_TIMEOUT) {
+              train_handled = VOID_BITS;
+              EventLogger::println(END_OF_TRAIN, "Stop expecting rest of packet train");
+            }
+            return VOID_BITS;
+          case NOISE:
+            continue;
+          case NEWS:
+            if (news.bits_received != train_handled) { // not just a repeat in the same train
+              train_handled = news.bits_received;
+              train_established_micros = news.time_received;
+              return train_handled;
+            }
+            continue;
         }
       }
-      if (train_handled != VOID_BITS) {
-        if (duration_from_to(train_established_micros, now) > TRAIN_TIMEOUT) {
-          train_handled = VOID_BITS;
-          EventLogger::println(END_OF_TRAIN, "Stop expecting rest of packet train");
-        }
-      }
-      return VOID_BITS;
     }
 };
