@@ -9,7 +9,6 @@ enum ProtocolNotice : uint8_t { END_OF_TRAIN,
                                 MISSED_PACKET = 10, DIRTY_BUFFER = 11,
                               };
 enum BufferStage : uint8_t { IDLE, DELIMITED, PREAMBLED, STARTED, FINISHED = PREAMBLED + 64 };
-static const uint32_t VOID_BITS = ~0ul;
 
 inline uint32_t duration_from_to(uint32_t early, uint32_t later) {
   return later - early;
@@ -26,10 +25,10 @@ class PeakHandler {
     static const uint8_t MIN_ADJACENT_PEAK_SPACING = 10; // unit = SCALING µs
     static const uint8_t MAX_ADJACENT_PEAK_SPACING = 20; // unit = SCALING µs
     static const uint8_t MIN_SEPARATE_PEAK_SPACING = 40; // unit = SCALING µs
+    static const uint8_t PACKET_FINAL_TIMEOUT      = 64; // unit = SCALING µs
     static const uint8_t MIN_PACKET_PREAMBLE       = 80; // unit = SCALING µs
     static const uint8_t MAX_PACKET_PREAMBLE      = 100; // unit = SCALING µs
     static const uint32_t MIN_PACKET_SPACING = 0x100 * SCALING; // unit = µs
-    static const uint32_t PARITY_TIMEOUT = 3 * MAX_ADJACENT_PEAK_SPACING; // unit = µs
 
     enum { IGNORED = 48 }; // completely ignore "packets" going no further than this
 
@@ -140,9 +139,9 @@ class PeakHandler {
 
     void finish_packet_offline(uint8_t buffer_incoming) {
       const uint8_t next_buffer_incoming = next_buffer(buffer_incoming);
-      if (buffers[next_buffer_incoming].reception_stage != IDLE) { // not marked as seen
+      if (buffers[next_buffer_incoming].stage() != IDLE) { // not marked as seen
         EventLogger::println(DIRTY_BUFFER, "Received packet not cleared");
-        buffers[next_buffer_incoming].reception_stage = IDLE;
+        buffers[next_buffer_incoming].mark_as_seen();
       }
       buffers[next_buffer_incoming].last_rise_micros = buffers[buffer_incoming].last_rise_micros;
       current_buffer_incoming = next_buffer_incoming;
@@ -163,7 +162,7 @@ class PeakHandler {
         return true;
       }
       if (buffers[buffer_index].reception_stage == FINISHED) {
-        if (duration_from_to(buffers[buffer_index].last_rise_micros, micros) > PARITY_TIMEOUT) {
+        if (duration_from_to(buffers[buffer_index].last_rise_micros, micros) > PACKET_FINAL_TIMEOUT * SCALING) {
           finish_packet_offline(buffer_index);
           return true;
         }
@@ -209,10 +208,10 @@ class PeakHandler {
 
     bool has_been_alive() {
       noInterrupts();
-      const uint32_t last_peak_micros = buffers[current_buffer_incoming].last_rise_micros;
+      const uint32_t last_rise_micros = buffers[current_buffer_incoming].last_rise_micros;
       interrupts();
-      if (last_probed_micros != last_peak_micros) {
-        last_probed_micros = last_peak_micros;
+      if (last_probed_micros != last_rise_micros) {
+        last_probed_micros = last_rise_micros;
         return true;
       } else {
         return false;

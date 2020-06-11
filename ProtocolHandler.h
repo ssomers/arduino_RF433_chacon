@@ -1,6 +1,7 @@
 #include "PeakHandler.h"
 
 static const uint32_t TRAIN_TIMEOUT = 0x50000;
+static const uint32_t VOID_BITS = ~0ul;
 
 template <typename EventLogger, bool logTiming>
 class ProtocolHandler {
