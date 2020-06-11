@@ -14,19 +14,16 @@ static const uint8_t PIN_DIGITAL_OUT_SLOW = 3;
 static const uint8_t PIN_DIGITAL_OUT_FAST = 4;
 static const unsigned long LOOP_MILLIS = 50;
 static const uint8_t LOOPS_LEARNING = 128;
-static const uint8_t LOOPS_CHATTY = 0;
+static const uint8_t LOOPS_CHATTY = 0; // meaning 256
 static const uint8_t LOOPS_PER_BOOST = 25;
 static const uint8_t LOOPS_PER_HEARTBEAT = 20;
 
 #ifdef LED_BUILTIN
-/*
-  #define Q(V) #V
-  #define QV(V) Q(V)
-  #pragma message "\nLED_BUILTIN = " QV(LED_BUILTIN) ";"
-*/
+// Aduino on modern library
 static const uint8_t PIN_BUZZER = 6;
 static const int INT_IN = digitalPinToInterrupt(PIN_DIGITAL_IN);
 #else
+// ATTiny85 on ancient Digispark library
 static const uint8_t PIN_BUZZER = 0;
 static const uint8_t LED_BUILTIN = 1;
 static const int INT_IN = 0;
@@ -102,7 +99,6 @@ static uint16_t note3(uint8_t beeps_buzzing) {
 static ProtocolNotice min_buzzed_notice = MIN_CONSIDERED_NOTICE;
 static uint8_t primary_notice = 0;
 static uint32_t primary_notice_time;
-static uint32_t last_good_time;
 
 struct BuzzingEventLogger {
   template <typename T> static void print(ProtocolNotice, T) {}
@@ -203,7 +199,7 @@ static void heartbeat() {
   static uint8_t iterations = 0;
   switch (++iterations) {
     case LOOPS_PER_HEARTBEAT - 5:
-      if (handler.is_alive()) {
+      if (handler.has_been_alive()) {
         digitalWrite(LED_BUILTIN, HIGH);
       }
       break;
@@ -290,7 +286,6 @@ static void respond() {
 
   const uint32_t bits = handler.receive();
   if (bits != VOID_BITS) {
-    last_good_time = micros();
 
     const Packet packet(bits);
     const bool recognized = transmitterButtonStorage.recognizes(packet);
@@ -333,11 +328,8 @@ void setup() {
   pinMode(PIN_DIGITAL_OUT_SLOW, OUTPUT);
   pinMode(PIN_DIGITAL_OUT_FAST, OUTPUT);
   attachInterrupt(INT_IN, []() {
-    handler.handleRise();
+    handler.handle_rise();
   }, RISING);
-#ifdef LED_BUILTIN
-  delay(100); // avoid spurious beep
-#endif
 
   transmitterButtonStorage.load();
   if (logEvents) {
@@ -347,7 +339,6 @@ void setup() {
 
   tone(PIN_BUZZER, NOTE_A6, 75);
   delay(150);
-  last_good_time = micros();
 }
 
 void loop() {

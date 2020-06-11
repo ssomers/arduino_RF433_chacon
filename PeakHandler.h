@@ -33,7 +33,7 @@ class PeakHandler {
 
     enum { IGNORED = 48 }; // completely ignore "packets" going no further than this
 
-  protected:
+  public:
     class Buffer {
         friend class PeakHandler;
         uint32_t last_rise_micros;
@@ -148,7 +148,7 @@ class PeakHandler {
       current_buffer_incoming = next_buffer_incoming;
     }
 
-  protected:
+  public:
     static uint8_t next_buffer(uint8_t b) {
       return b + 1 < RECEPTION_BUFFERS ? b + 1 : 0;
     }
@@ -176,7 +176,7 @@ class PeakHandler {
       buffers[0].last_rise_micros = micros();
     }
 
-    void handleRise() {
+    void handle_rise() {
       const uint32_t now = micros();
       const uint8_t buffer_incoming = current_buffer_incoming;
       const uint32_t spacing = duration_from_to(buffers[buffer_incoming].last_rise_micros, now);
@@ -207,7 +207,7 @@ class PeakHandler {
       buffers[next_buffer_incoming].last_rise_micros = now;
     }
 
-    bool is_alive() {
+    bool has_been_alive() {
       noInterrupts();
       const uint32_t last_peak_micros = buffers[current_buffer_incoming].last_rise_micros;
       interrupts();
