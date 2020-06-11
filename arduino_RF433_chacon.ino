@@ -9,40 +9,43 @@ static const bool logTiming = false;
 static const ProtocolNotice MIN_CONSIDERED_NOTICE = INVALID_PREAMBLE;
 static const ProtocolNotice MIN_CONSIDERED_NOTICE_LATER = WRONG_PEAK_COUNT;
 
-static const uint8_t PIN_DIGITAL_IN = 2;
-static const uint8_t PIN_DIGITAL_OUT_SLOW = 3;
-static const uint8_t PIN_DIGITAL_OUT_FAST = 4;
+static const uint8_t PIN_IN_ASK = 2;
+static const uint8_t PIN_OUT_BUZZER = 3;
 static const unsigned long LOOP_MILLIS = 50;
 static const uint8_t LOOPS_LEARNING = 128;
 static const uint8_t LOOPS_CHATTY = 0; // meaning 256
-static const uint8_t LOOPS_PER_BOOST = 25;
+static const uint8_t LOOPS_BOOST_UP = 25;
+static const uint8_t LOOPS_BOOST_DOWN = 5;
 static const uint8_t LOOPS_PER_HEARTBEAT = 20;
 
 #ifdef LED_BUILTIN
 // Aduino on modern library
-static const uint8_t PIN_BUZZER = 6;
-static const int INT_IN = digitalPinToInterrupt(PIN_DIGITAL_IN);
+static const int INT_IN = digitalPinToInterrupt(PIN_IN_ASK);
+static const uint8_t PIN_OUT_LED = LED_BUILTIN;
+static const uint8_t PIN_OUT_SLOW = 11;
+static const uint8_t PIN_OUT_FAST = 12;
 #else
 // ATTiny85 on ancient Digispark library
-static const uint8_t PIN_BUZZER = 0;
-static const uint8_t LED_BUILTIN = 1;
 static const int INT_IN = 0;
+static const uint8_t PIN_OUT_LED = 4;
+static const uint8_t PIN_OUT_SLOW = 0;
+static const uint8_t PIN_OUT_FAST = 1;
 #endif
 
 enum Speed : uint8_t { OFF, SLOW, FAST };
 
 static void write_speed(Speed speed) {
   // Make sure that at no point both output pins are high
-  if (speed != SLOW) digitalWrite(PIN_DIGITAL_OUT_SLOW, LOW);
-  if (speed != FAST) digitalWrite(PIN_DIGITAL_OUT_FAST, LOW);
-  if (speed == SLOW) digitalWrite(PIN_DIGITAL_OUT_SLOW, HIGH);
-  if (speed == FAST) digitalWrite(PIN_DIGITAL_OUT_FAST, HIGH);
+  if (speed != SLOW) digitalWrite(PIN_OUT_SLOW, LOW);
+  if (speed != FAST) digitalWrite(PIN_OUT_FAST, LOW);
+  if (speed == SLOW) digitalWrite(PIN_OUT_SLOW, HIGH);
+  if (speed == FAST) digitalWrite(PIN_OUT_FAST, HIGH);
 }
 
 static Speed read_speed() {
-  if (digitalRead(PIN_DIGITAL_OUT_FAST)) {
+  if (digitalRead(PIN_OUT_FAST)) {
     return FAST;
-  } else if (digitalRead(PIN_DIGITAL_OUT_SLOW)) {
+  } else if (digitalRead(PIN_OUT_SLOW)) {
     return SLOW;
   } else {
     return OFF;
@@ -146,6 +149,30 @@ static void dump_transmitters_and_buttons(const char* prefix) {
   }
 }
 
+void setup() {
+  if (logEvents) {
+    Serial.begin(115200);
+  }
+
+  pinMode(PIN_IN_ASK, INPUT);
+  pinMode(PIN_OUT_LED, OUTPUT);
+  pinMode(PIN_OUT_BUZZER, OUTPUT);
+  pinMode(PIN_OUT_SLOW, OUTPUT);
+  pinMode(PIN_OUT_FAST, OUTPUT);
+  attachInterrupt(INT_IN, []() {
+    handler.handle_rise();
+  }, RISING);
+
+  transmitterButtonStorage.load();
+  if (logEvents) {
+    dump_transmitters_and_buttons("Initial");
+    Serial.println("Start learning");
+  }
+
+  tone(PIN_OUT_BUZZER, NOTE_A6, 75);
+  delay(150);
+}
+
 static bool initial_learning() {
   static uint8_t iterations = 0;
 
@@ -157,7 +184,7 @@ static bool initial_learning() {
     }
     iterations = 0;
   }
-  digitalWrite(LED_BUILTIN, iterations & 8 ? HIGH : LOW);
+  digitalWrite(PIN_OUT_LED, iterations & 8 ? HIGH : LOW);
 
   const uint32_t bits = handler.receive();
   if (bits != VOID_BITS) {
@@ -200,17 +227,17 @@ static void heartbeat() {
   switch (++iterations) {
     case LOOPS_PER_HEARTBEAT - 5:
       if (handler.has_been_alive()) {
-        digitalWrite(LED_BUILTIN, HIGH);
+        digitalWrite(PIN_OUT_LED, HIGH);
       }
       break;
     case LOOPS_PER_HEARTBEAT - 4:
-      digitalWrite(LED_BUILTIN, LOW);
+      digitalWrite(PIN_OUT_LED, LOW);
       break;
     case LOOPS_PER_HEARTBEAT - 1:
-      digitalWrite(LED_BUILTIN, HIGH);
+      digitalWrite(PIN_OUT_LED, HIGH);
       break;
     case LOOPS_PER_HEARTBEAT - 0:
-      digitalWrite(LED_BUILTIN, LOW);
+      digitalWrite(PIN_OUT_LED, LOW);
       iterations = 0;
   }
 }
@@ -248,10 +275,10 @@ static void buzz_primary_notice() {
   if (beeps_buzzing > 0) {
     switch (++iterations) {
       case 1:
-        tone(PIN_BUZZER, note1(beeps_buzzing), 80);
+        tone(PIN_OUT_BUZZER, note1(beeps_buzzing), 80);
         break;
       case 3:
-        tone(PIN_BUZZER, note2(beeps_buzzing), beeps_buzzing < 5 ? 25 : 100);
+        tone(PIN_OUT_BUZZER, note2(beeps_buzzing), beeps_buzzing < 5 ? 25 : 100);
         break;
       case 5:
         if (beeps_buzzing >= LOCALS && !note3(beeps_buzzing)) {
@@ -263,7 +290,7 @@ static void buzz_primary_notice() {
         break;
       case 6:
         if (beeps_buzzing >= LOCALS) {
-          tone(PIN_BUZZER, note3(beeps_buzzing), 60);
+          tone(PIN_OUT_BUZZER, note3(beeps_buzzing), 60);
         } else {
           beeps_buzzing -= 5;
           iterations = 2;
@@ -277,10 +304,10 @@ static void buzz_primary_notice() {
 }
 
 static void respond() {
-  static uint8_t boost_iterations = 0;
-  if (boost_iterations > 0) {
-    if (--boost_iterations == 0) {
-      write_speed(SLOW);
+  static uint8_t transition_iterations = 0;
+  if (transition_iterations > 0) {
+    if (--transition_iterations == 0) {
+      write_speed(read_speed() == SLOW ? FAST : SLOW);
     }
   }
 
@@ -296,49 +323,25 @@ static void respond() {
     }
     if (recognized) {
       if (packet.on_or_off()) {
-        if (boost_iterations > 0) {
-          boost_iterations = 0;
+        if (transition_iterations > 0) {
+          transition_iterations = 0;
         } else if (read_speed() == OFF) {
-          boost_iterations = LOOPS_PER_BOOST;
+          transition_iterations = LOOPS_BOOST_UP;
         }
         write_speed(FAST);
       } else {
-        if (boost_iterations == 0 && read_speed() == FAST) {
-          write_speed(SLOW);
-        } else {
-          write_speed(OFF);
+        if (transition_iterations > 0) {
+          transition_iterations = 0;
+        } else if (read_speed() == FAST) {
+          transition_iterations = LOOPS_BOOST_DOWN;
         }
-        boost_iterations = 0;
+        write_speed(OFF);
       }
       primary_notice = packet.on_or_off() ? GOING_UP : GOING_DOWN;
     } else {
       primary_notice = GOING_NOWHERE; // also wipe errors from initial packet(s) in packet train
     }
   }
-}
-
-void setup() {
-  if (logEvents) {
-    Serial.begin(115200);
-  }
-
-  pinMode(PIN_DIGITAL_IN, INPUT);
-  pinMode(LED_BUILTIN, OUTPUT);
-  pinMode(PIN_BUZZER, OUTPUT);
-  pinMode(PIN_DIGITAL_OUT_SLOW, OUTPUT);
-  pinMode(PIN_DIGITAL_OUT_FAST, OUTPUT);
-  attachInterrupt(INT_IN, []() {
-    handler.handle_rise();
-  }, RISING);
-
-  transmitterButtonStorage.load();
-  if (logEvents) {
-    dump_transmitters_and_buttons("Initial");
-    Serial.println("Start learning");
-  }
-
-  tone(PIN_BUZZER, NOTE_A6, 75);
-  delay(150);
 }
 
 void loop() {
@@ -352,11 +355,11 @@ void loop() {
         Serial.println("Ended learning");
       }
       for (uint8_t i = transmitterButtonStorage.count(); i > 0; --i) {
-        digitalWrite(LED_BUILTIN, HIGH);
-        tone(PIN_BUZZER, NOTE_A5);
+        digitalWrite(PIN_OUT_LED, HIGH);
+        tone(PIN_OUT_BUZZER, NOTE_A5);
         delay(50);
-        noTone(PIN_BUZZER);
-        digitalWrite(LED_BUILTIN, LOW);
+        noTone(PIN_OUT_BUZZER);
+        digitalWrite(PIN_OUT_LED, LOW);
         delay(25);
       }
     }
