@@ -32,24 +32,34 @@ class PeakHandler {
 
     enum { IGNORED = 48 }; // completely ignore "packets" going no further than this
 
+    static bool validate_preamble(uint16_t preamble_duration_32micros) {
+      if (preamble_duration_32micros < MIN_PACKET_PREAMBLE || preamble_duration_32micros > MAX_PACKET_PREAMBLE) {
+        EventLogger::print(INVALID_PREAMBLE, preamble_duration_32micros * SCALING);
+        EventLogger::println(INVALID_PREAMBLE, "µs preamble after delimiter");
+        return false;
+      } else {
+        return true;
+      }
+    }
+
   public:
     class Buffer {
         friend class PeakHandler;
         uint32_t last_rise_micros;
-        BufferStage reception_stage = IDLE;
+        BufferStage reception_stage;
         uint8_t peak_32micros[FINISHED - PREAMBLED + 1]; // unit = SCALING µs
 
-        static bool validate_preamble(uint16_t preamble_duration_32micros) {
-          if (preamble_duration_32micros < MIN_PACKET_PREAMBLE || preamble_duration_32micros > MAX_PACKET_PREAMBLE) {
-            EventLogger::print(INVALID_PREAMBLE, preamble_duration_32micros * SCALING);
-            EventLogger::println(INVALID_PREAMBLE, "µs preamble after delimiter");
-            return false;
-          } else {
-            return true;
-          }
+      public:
+        void initialize_at_startup() {
+          last_rise_micros = micros();
+          reception_stage = IDLE;
         }
 
-      public:
+        void initialize_from(Buffer const& other) {
+          last_rise_micros = other.last_rise_micros;
+          reception_stage = IDLE;
+        }
+
         BufferStage stage() const {
           return reception_stage;
         }
@@ -126,6 +136,10 @@ class PeakHandler {
           }
         }
 
+        bool appears_final_at(uint32_t micros) const {
+          return reception_stage == FINISHED && duration_from_to(last_rise_micros, micros) > PACKET_FINAL_TIMEOUT * SCALING;
+        }
+
         void mark_as_seen() {
           reception_stage = IDLE;
         }
@@ -141,9 +155,8 @@ class PeakHandler {
       const uint8_t next_buffer_incoming = next_buffer(buffer_incoming);
       if (buffers[next_buffer_incoming].stage() != IDLE) { // not marked as seen
         EventLogger::println(DIRTY_BUFFER, "Received packet not cleared");
-        buffers[next_buffer_incoming].mark_as_seen();
       }
-      buffers[next_buffer_incoming].last_rise_micros = buffers[buffer_incoming].last_rise_micros;
+      buffers[next_buffer_incoming].initialize_from(buffers[buffer_incoming]);
       current_buffer_incoming = next_buffer_incoming;
     }
 
@@ -161,18 +174,16 @@ class PeakHandler {
       if (buffer_index != current_buffer_incoming) {
         return true;
       }
-      if (buffers[buffer_index].reception_stage == FINISHED) {
-        if (duration_from_to(buffers[buffer_index].last_rise_micros, micros) > PACKET_FINAL_TIMEOUT * SCALING) {
-          finish_packet_offline(buffer_index);
-          return true;
-        }
+      if (buffers[buffer_index].appears_final_at(micros)) {
+        finish_packet_offline(buffer_index);
+        return true;
       }
       return false;
     }
 
   public:
     PeakHandler() {
-      buffers[0].last_rise_micros = micros();
+      buffers[0].initialize_at_startup();
     }
 
     void handle_rise() {
