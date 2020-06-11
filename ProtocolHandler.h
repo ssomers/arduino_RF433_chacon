@@ -5,7 +5,7 @@ static const uint32_t VOID_BITS = ~0ul;
 
 template <typename EventLogger, bool logTiming>
 class ProtocolHandler {
-    typedef PeakHandler<EventLogger, logTiming> Core;
+    typedef PeakHandler<EventLogger> Core;
     Core peak_handler;
     uint32_t train_handled = VOID_BITS;
     uint32_t train_established_micros;
@@ -18,17 +18,11 @@ class ProtocolHandler {
       const bool final = peak_handler.finalize_offline(buffer_receiving, now);
       interrupts();
       if (final) {
-        typename Core::Buffer& buffer = peak_handler.access_buffer(buffer_receiving);
-        buffer.dump(now);
-        bool success = false;
-        if (buffer.stage() == FINISHED) {
-          success = buffer.decode(news);
-        } else if (buffer.stage() >= FINISHED - 2) {
-          EventLogger::println(MISSING_SOME_PEAKS, "Missing some peaks");
-        } else {
-          EventLogger::print(SPURIOUS_PEAKS, "Invalid peak count ");
-          EventLogger::println(SPURIOUS_PEAKS, buffer.stage());
+        Buffer<EventLogger>& buffer = peak_handler.access_buffer(buffer_receiving);
+        if (logTiming) {
+          buffer.dump(now);
         }
+        const bool success = buffer.decode(news);
         buffer.mark_as_seen();
         buffer_receiving = peak_handler.next_buffer(buffer_receiving);
         return success ? NEWS : NOISE;
