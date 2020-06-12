@@ -4,28 +4,29 @@
 #include "ProtocolHandler.h"
 #include "TransmitterButtonStorage.h"
 
-static const bool logEvents = false;
-static const bool logTiming = false;
 static const ProtocolNotice MIN_CONSIDERED_NOTICE = INVALID_PREAMBLE;
-static const ProtocolNotice MIN_CONSIDERED_NOTICE_LATER = WRONG_PEAK_COUNT;
 
 static const uint8_t PIN_IN_ASK = 2;
 static const uint8_t PIN_OUT_BUZZER = 3;
 static const unsigned long LOOP_MILLIS = 50;
 static const uint8_t LOOPS_LEARNING = 128;
 static const uint8_t LOOPS_CHATTY = 0; // meaning 256
-static const uint8_t LOOPS_BOOST_UP = 25;
-static const uint8_t LOOPS_BOOST_DOWN = 5;
-static const uint8_t LOOPS_PER_HEARTBEAT = 20;
+static const uint8_t LOOPS_BOOST_UP = 20;
+static const uint8_t LOOPS_BOOST_DOWN = 2;
+static const uint8_t LOOPS_PER_HEARTBEAT = 25;
 
 #ifdef LED_BUILTIN
 // Aduino on modern library
+static const bool logEvents = true;
+static const bool logTiming = false;
 static const int INT_IN = digitalPinToInterrupt(PIN_IN_ASK);
 static const uint8_t PIN_OUT_LED = LED_BUILTIN;
 static const uint8_t PIN_OUT_SLOW = 11;
 static const uint8_t PIN_OUT_FAST = 12;
 #else
 // ATTiny85 on ancient Digispark library
+static const bool logEvents = false;
+static const bool logTiming = false;
 static const int INT_IN = 0;
 static const uint8_t PIN_OUT_LED = 4;
 static const uint8_t PIN_OUT_SLOW = 0;
@@ -99,22 +100,21 @@ static uint16_t note3(uint8_t beeps_buzzing) {
   }
 }
 
-static ProtocolNotice min_buzzed_notice = MIN_CONSIDERED_NOTICE;
 static uint8_t primary_notice = 0;
 static uint32_t primary_notice_time;
 
-struct BuzzingEventLogger {
+template <bool logEvents> struct EventLogger;
+template <> struct EventLogger<false> {
   template <typename T> static void print(ProtocolNotice, T) {}
   template <typename T, typename F> static void print(ProtocolNotice, T, F) {}
   template <typename T> static void println(ProtocolNotice n, T) {
-    if (n > primary_notice) {
+    if (n >= MIN_CONSIDERED_NOTICE && n > primary_notice) {
       primary_notice = n;
       primary_notice_time = micros();
     }
   }
 };
-
-struct SerialEventLogger {
+template <> struct EventLogger<true> {
   template <typename T> static void print(ProtocolNotice n, T t) {
     if (n >= MIN_CONSIDERED_NOTICE) Serial.print(t);
   }
@@ -123,10 +123,11 @@ struct SerialEventLogger {
   }
   template <typename T> static void println(ProtocolNotice n, T t) {
     if (n >= MIN_CONSIDERED_NOTICE) Serial.println(t);
+    EventLogger<false>::println(n, t);
   }
 };
 
-static ProtocolHandler<BuzzingEventLogger, logTiming> handler;
+static ProtocolHandler<EventLogger<logEvents>, logTiming> handler;
 static TransmitterButtonStorage transmitterButtonStorage;
 
 static void print_transmitter_and_button(const char* prefix, Packet packet) {
@@ -242,19 +243,6 @@ static void heartbeat() {
   }
 }
 
-static void quiet_down() {
-  if (min_buzzed_notice != MIN_CONSIDERED_NOTICE_LATER) {
-    static uint8_t iterations = 0;
-    ++iterations;
-    if (iterations == LOOPS_CHATTY) {
-      min_buzzed_notice = MIN_CONSIDERED_NOTICE_LATER;
-      if (primary_notice < LOCALS) {
-        primary_notice = SHUTTING_UP;
-      }
-    }
-  }
-}
-
 static void buzz_primary_notice() {
   static uint8_t beeps_buzzing = 0;
   static uint8_t iterations;
@@ -263,7 +251,7 @@ static void buzz_primary_notice() {
     beeps_buzzing = primary_notice;
     primary_notice = 0;
     iterations = 0;
-  } else if (beeps_buzzing == 0 && primary_notice >= min_buzzed_notice) {
+  } else if (beeps_buzzing == 0 && primary_notice > 0) {
     // postpone notice until we're sure it isn't going to be cancelled by a properly received packet
     if (duration_from_to(primary_notice_time, micros()) > TRAIN_TIMEOUT) {
       beeps_buzzing = primary_notice;
@@ -365,7 +353,6 @@ void loop() {
     }
   } else {
     heartbeat();
-    quiet_down();
     respond();
   }
   buzz_primary_notice();
