@@ -4,10 +4,10 @@ enum ProtocolNotice : uint8_t { END_OF_TRAIN,
                                 WRONG_PEAK_SPACING = 4, WRONG_PEAK_COUNT = 5,
                                 MISSING_BITS = 6, EXCESS_BITS = 7,
                                 WRONG_PARITY = 8,
-                                MISSED_PACKET = 9, DIRTY_BUFFER = 10,
+                                MISSED_PACKET = 9,
                               };
 enum { PEAKS = 65, IGNORED_WHEN_INCOMPLETE = 60 };
-enum BufferStage : uint8_t { IDLE, DELIMITED, STARTED, FINISHED = DELIMITED + PEAKS };
+enum PeakBufferStage : uint8_t { IDLE, DELIMITED, STARTED, FINISHED = DELIMITED + PEAKS };
 
 inline uint32_t duration_from_to(uint32_t early, uint32_t later) {
   return later - early;
@@ -19,7 +19,7 @@ struct Reception {
 };
 
 template <typename EventLogger>
-class Buffer {
+class PeakBuffer {
     static const uint8_t SCALING = 32; // enough for spacing to max out on delimiters
     static const uint8_t MIN_ADJACENT_PEAK_SPACING = 10; // unit = SCALING µs
     static const uint8_t MAX_ADJACENT_PEAK_SPACING = 20; // unit = SCALING µs
@@ -38,7 +38,7 @@ class Buffer {
       reception_stage = IDLE;
     }
 
-    void initialize_from(Buffer const& other) {
+    void initialize_from(PeakBuffer const& other) {
       last_rise_micros = other.last_rise_micros;
       reception_stage = IDLE;
     }
@@ -154,81 +154,5 @@ class Buffer {
       Serial.print("  ");
       Serial.print(micros());
       Serial.println(" finishing this debug output");
-    }
-
-    void mark_as_seen() {
-      reception_stage = IDLE;
-    }
-};
-
-template <typename EventLogger>
-class PeakHandler {
-  private:
-    static const uint8_t RECEPTION_BUFFERS = 4;
-    Buffer<EventLogger> buffers[RECEPTION_BUFFERS];
-    volatile uint8_t current_buffer_incoming = 0;
-    uint32_t last_probed_micros;
-
-    void finish_packet_offline(uint8_t buffer_incoming) {
-      const uint8_t next_buffer_incoming = next_buffer(buffer_incoming);
-      if (buffers[next_buffer_incoming].stage() != IDLE) { // not marked as seen
-        EventLogger::println(DIRTY_BUFFER, "Received packet not cleared");
-      }
-      buffers[next_buffer_incoming].initialize_from(buffers[buffer_incoming]);
-      current_buffer_incoming = next_buffer_incoming;
-    }
-
-  public:
-    static uint8_t next_buffer(uint8_t b) {
-      return b + 1 < RECEPTION_BUFFERS ? b + 1 : 0;
-    }
-
-    Buffer<EventLogger>& access_buffer(uint8_t b) {
-      return buffers[b];
-    }
-
-    // Must be invoked with interrupts disabled
-    bool finalize_offline(uint8_t buffer_index, uint32_t micros) {
-      if (buffer_index != current_buffer_incoming) {
-        return true;
-      }
-      if (buffers[buffer_index].appears_final_at(micros)) {
-        finish_packet_offline(buffer_index);
-        return true;
-      }
-      return false;
-    }
-
-  public:
-    PeakHandler() {
-      buffers[0].initialize_at_startup();
-    }
-
-    void handle_rise() {
-      uint8_t buffer_incoming = current_buffer_incoming;
-      const uint32_t now = micros();
-      const uint8_t spacing_32micros = buffers[buffer_incoming].spacing_32micros(now);
-      if (spacing_32micros == 0xFF) {
-        if (buffers[buffer_incoming].stage() > DELIMITED + IGNORED_WHEN_INCOMPLETE) {
-          buffer_incoming = next_buffer(buffer_incoming);
-          if (buffers[buffer_incoming].stage() != IDLE) { // not marked as seen
-            EventLogger::println(MISSED_PACKET, "Packet not timely processed by main loop");
-          }
-          current_buffer_incoming = buffer_incoming;
-        }
-      }
-      buffers[buffer_incoming].handle_rise(now, spacing_32micros);
-    }
-
-    bool has_been_alive() {
-      noInterrupts();
-      const uint32_t last_rise_micros = buffers[current_buffer_incoming].probe_last_rise_micros();
-      interrupts();
-      if (last_probed_micros != last_rise_micros) {
-        last_probed_micros = last_rise_micros;
-        return true;
-      } else {
-        return false;
-      }
     }
 };

@@ -1,30 +1,25 @@
-#include "PeakHandler.h"
+#include "PeakBufferPool.h"
 
 static const uint32_t TRAIN_TIMEOUT = 0x50000;
 static const uint32_t VOID_BITS = ~0ul;
 
 template <typename EventLogger, bool logTiming>
 class ProtocolHandler {
-    typedef PeakHandler<EventLogger> Core;
-    Core peak_handler;
+    typedef PeakBufferPool<EventLogger> Core;
+    Core peak_buffer_pool;
     uint32_t train_handled = VOID_BITS;
     uint32_t train_established_micros;
-    uint8_t buffer_receiving = 0;
+    uint32_t last_probed_micros;
 
   private:
     enum ReceptionSummary { NOTHING, NOISE, NEWS };
     ReceptionSummary catch_up_one(const uint32_t now, Reception& news) {
-      noInterrupts();
-      const bool final = peak_handler.finalize_offline(buffer_receiving, now);
-      interrupts();
-      if (final) {
-        Buffer<EventLogger>& buffer = peak_handler.access_buffer(buffer_receiving);
+      if (PeakBuffer<EventLogger>* const buffer = peak_buffer_pool.finalize_buffer(now)) {
         if (logTiming) {
-          buffer.dump(now);
+          buffer->dump(now);
         }
-        const bool success = buffer.decode(news);
-        buffer.mark_as_seen();
-        buffer_receiving = peak_handler.next_buffer(buffer_receiving);
+        const bool success = buffer->decode(news);
+        peak_buffer_pool.mark_as_received();
         return success ? NEWS : NOISE;
       } else {
         return NOTHING;
@@ -33,11 +28,17 @@ class ProtocolHandler {
 
   public:
     void handle_rise() {
-      peak_handler.handle_rise();
+      peak_buffer_pool.handle_rise();
     }
 
     bool has_been_alive() {
-      return peak_handler.has_been_alive();
+      const uint32_t last_rise_micros = peak_buffer_pool.probe_last_rise_micros();
+      if (last_probed_micros != last_rise_micros) {
+        last_probed_micros = last_rise_micros;
+        return true;
+      } else {
+        return false;
+      }
     }
 
     uint32_t receive() {

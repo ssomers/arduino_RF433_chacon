@@ -11,8 +11,8 @@ static const uint8_t PIN_OUT_BUZZER = 3;
 static const unsigned long LOOP_MILLIS = 50;
 static const uint8_t LOOPS_LEARNING = 128;
 static const uint8_t LOOPS_CHATTY = 0; // meaning 256
-static const uint8_t LOOPS_BOOST_UP = 20;
-static const uint8_t LOOPS_BOOST_DOWN = 2;
+static const uint8_t LOOPS_SPEED_UP = 20;
+static const uint8_t LOOPS_SLOW_DOWN = 2;
 static const uint8_t LOOPS_PER_HEARTBEAT = 25;
 
 #ifdef LED_BUILTIN
@@ -314,14 +314,14 @@ static void respond() {
         if (transition_iterations > 0) {
           transition_iterations = 0;
         } else if (read_speed() == OFF) {
-          transition_iterations = LOOPS_BOOST_UP;
+          transition_iterations = LOOPS_SPEED_UP;
         }
         write_speed(FAST);
       } else {
         if (transition_iterations > 0) {
           transition_iterations = 0;
         } else if (read_speed() == FAST) {
-          transition_iterations = LOOPS_BOOST_DOWN;
+          transition_iterations = LOOPS_SLOW_DOWN;
         }
         write_speed(OFF);
       }
