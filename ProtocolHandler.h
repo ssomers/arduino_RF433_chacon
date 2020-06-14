@@ -32,9 +32,9 @@ class ProtocolHandler {
     }
 
     bool has_been_alive() {
-      const uint32_t last_rise_micros = peak_buffer_pool.probe_last_rise_micros();
-      if (last_probed_micros != last_rise_micros) {
-        last_probed_micros = last_rise_micros;
+      const uint32_t last_peak_micros = peak_buffer_pool.probe_last_peak_micros();
+      if (last_probed_micros != last_peak_micros) {
+        last_probed_micros = last_peak_micros;
         return true;
       } else {
         return false;

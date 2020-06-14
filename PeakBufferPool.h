@@ -18,16 +18,18 @@ class PeakBufferPool {
 
     void handle_rise() {
       const uint32_t now = micros();
-      const uint8_t spacing_32micros = buffers[buffer_incoming].spacing_32micros(now);
-      if (spacing_32micros == 0xFF) {
-        if (buffers[buffer_incoming].stage() > DELIMITED + IGNORED_WHEN_INCOMPLETE) {
+      const uint8_t preceding32micros = buffers[buffer_incoming].preceding32micros(now);
+      if (preceding32micros == 0xFF) {
+        if (buffers[buffer_incoming].has_almost_seen_packet()) {
           buffer_incoming = next_buffer(buffer_incoming);
           if (buffer_incoming == buffer_outgoing) {
             EventLogger::println(MISSED_PACKET, "Packet not timely processed by main loop");
           }
         }
+        buffers[buffer_incoming].initialize_delimited(now);
+      } else {
+        buffers[buffer_incoming].register_peak(now, preceding32micros);
       }
-      buffers[buffer_incoming].handle_rise(now, spacing_32micros);
     }
 
     PeakBuffer<EventLogger>* finalize_buffer(uint32_t micros) {
@@ -51,9 +53,9 @@ class PeakBufferPool {
       buffer_outgoing = next_buffer(buffer_outgoing);
     }
 
-    uint32_t probe_last_rise_micros() const {
+    uint32_t probe_last_peak_micros() const {
       noInterrupts();
-      const uint32_t result = buffers[buffer_incoming].probe_last_rise_micros();
+      const uint32_t result = buffers[buffer_incoming].probe_last_peak_micros();
       interrupts();
       return result;
     }

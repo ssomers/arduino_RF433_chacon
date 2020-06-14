@@ -6,8 +6,8 @@ enum ProtocolNotice : uint8_t { END_OF_TRAIN,
                                 WRONG_PARITY = 8,
                                 MISSED_PACKET = 9,
                               };
-enum { PEAKS = 65, IGNORED_WHEN_INCOMPLETE = 60 };
-enum PeakBufferStage : uint8_t { IDLE, DELIMITED, STARTED, FINISHED = DELIMITED + PEAKS };
+
+static const uint8_t PEAKS = 65;
 
 inline uint32_t duration_from_to(uint32_t early, uint32_t later) {
   return later - early;
@@ -24,69 +24,72 @@ class PeakBuffer {
     static const uint8_t MIN_ADJACENT_PEAK_SPACING = 10; // unit = SCALING µs
     static const uint8_t MAX_ADJACENT_PEAK_SPACING = 20; // unit = SCALING µs
     static const uint8_t MIN_SEPARATE_PEAK_SPACING = 40; // unit = SCALING µs
-    static const uint8_t PACKET_FINAL_TIMEOUT      = 64; // unit = SCALING µs
+    static const uint8_t PACKET_FINAL_TIMEOUT      = 60; // unit = SCALING µs
     static const uint8_t MIN_PACKET_PREAMBLE       = 80; // unit = SCALING µs
     static const uint8_t MAX_PACKET_PREAMBLE      = 100; // unit = SCALING µs
 
-    uint32_t last_rise_micros;
-    uint8_t reception_stage;
-    uint8_t peak_32micros[PEAKS]; // unit = SCALING µs
+    uint32_t last_peak_micros;
+    uint8_t peak_count;
+    uint8_t peak_preceding32micros[PEAKS - 1]; // unit = SCALING µs, can't record delimiter peak
 
   public:
     void initialize_at_startup() {
-      last_rise_micros = micros();
-      reception_stage = IDLE;
+      last_peak_micros = micros();
+      peak_count = 0;
     }
 
     void initialize_from(PeakBuffer const& other) {
-      last_rise_micros = other.last_rise_micros;
-      reception_stage = IDLE;
+      last_peak_micros = other.last_peak_micros;
+      peak_count = 0;
     }
 
-    uint32_t probe_last_rise_micros() const {
-      return last_rise_micros;
+    void initialize_delimited(uint32_t now) {
+      last_peak_micros = now;
+      peak_count = 1;
     }
 
-    uint8_t spacing_32micros(uint32_t now) const {
-      const uint32_t spacing = duration_from_to(last_rise_micros, now);
+    void register_peak(uint32_t now, uint8_t preceding32micros) {
+      last_peak_micros = now;
+      if (peak_count > 0) {
+        ++peak_count;
+        // if we get so many consecutive peaks that peak_count spills, just let it be
+        if (peak_count <= PEAKS) {
+          peak_preceding32micros[peak_count - 2] = preceding32micros; // peak 2 is first recorded peak
+        }
+      }
+    }
+
+    uint32_t probe_last_peak_micros() const {
+      return last_peak_micros;
+    }
+
+    uint8_t preceding32micros(uint32_t now) const {
+      const uint32_t spacing = duration_from_to(last_peak_micros, now);
       return spacing / SCALING > 0xFF ? 0xFF : spacing / SCALING;
     }
 
     bool appears_final_at(uint32_t now) const {
-      return reception_stage == FINISHED && duration_from_to(last_rise_micros, now) > PACKET_FINAL_TIMEOUT * SCALING;
+      return peak_count == PEAKS && duration_from_to(last_peak_micros, now) > PACKET_FINAL_TIMEOUT * SCALING;
     }
 
-    void handle_rise(uint32_t now, uint8_t spacing_32micros) {
-      if (spacing_32micros == 0xFF) {
-        reception_stage = DELIMITED;
-      } else if (reception_stage > IDLE) {
-        ++reception_stage;
-        // if we get so many consecutive peaks that reception_stage spills, just let it be
-        if (reception_stage <= FINISHED) {
-          peak_32micros[reception_stage - STARTED] = spacing_32micros;
-        }
-      }
-      last_rise_micros = now;
-    }
-
-    uint8_t stage() const {
-      return reception_stage;
+    bool has_almost_seen_packet() const {
+      return peak_count >= PEAKS * 9 / 10;
     }
 
     bool decode(Reception& packet) const {
-      if (reception_stage > FINISHED) {
-        EventLogger::print(EXCESS_TOTAL_PEAKS, reception_stage - DELIMITED);
+      if (peak_count > PEAKS) {
+        EventLogger::print(EXCESS_TOTAL_PEAKS, peak_count);
         EventLogger::println(EXCESS_TOTAL_PEAKS, " peaks in a packet");
         return false;
       }
-      if (reception_stage < FINISHED) {
-        EventLogger::print(MISSING_TOTAL_PEAKS, reception_stage - DELIMITED);
+      if (peak_count < PEAKS) {
+        EventLogger::print(MISSING_TOTAL_PEAKS, peak_count);
         EventLogger::println(MISSING_TOTAL_PEAKS, " peaks in a packet");
         return false;
       }
 
-      if (peak_32micros[0] < MIN_PACKET_PREAMBLE || peak_32micros[0] > MAX_PACKET_PREAMBLE) {
-        EventLogger::print(INVALID_PREAMBLE, peak_32micros[0] * SCALING);
+      if (peak_preceding32micros[0] < MIN_PACKET_PREAMBLE || peak_preceding32micros[0] > MAX_PACKET_PREAMBLE) {
+        EventLogger::print(INVALID_PREAMBLE, peak_preceding32micros[0] * SCALING);
         EventLogger::println(INVALID_PREAMBLE, "µs preamble after delimiter");
         return false;
       }
@@ -96,12 +99,12 @@ class PeakBuffer {
       uint8_t spacing_errors = 0;
       uint8_t bit_errors = 0;
       packet.bits_received = 0;
-      packet.time_received = last_rise_micros;
-      for (uint8_t p = 1; p < PEAKS; ++p) {
-        const uint8_t spacing_32micros = peak_32micros[p];
-        if (spacing_32micros < MIN_SEPARATE_PEAK_SPACING) {
-          spacing_errors += (spacing_32micros < MIN_ADJACENT_PEAK_SPACING);
-          spacing_errors += (spacing_32micros > MAX_ADJACENT_PEAK_SPACING);
+      packet.time_received = last_peak_micros;
+      for (uint8_t p = 1; p < PEAKS - 1; ++p) {
+        const uint8_t preceding32micros = peak_preceding32micros[p];
+        if (preceding32micros < MIN_SEPARATE_PEAK_SPACING) {
+          spacing_errors += (preceding32micros < MIN_ADJACENT_PEAK_SPACING);
+          spacing_errors += (preceding32micros > MAX_ADJACENT_PEAK_SPACING);
           extra_adjacent_peaks += 1;
         } else {
           const uint8_t bit = 1 + (packet.bits_received & 1) - extra_adjacent_peaks;
@@ -139,14 +142,14 @@ class PeakBuffer {
 
     void dump(uint32_t now) const {
       Serial.println("Timing:");
-      for (uint8_t p = 0; p < min(PEAKS, reception_stage - DELIMITED); ++p) {
+      for (uint8_t p = 0; p < min(PEAKS, peak_count) - 1; ++p) {
         Serial.print("  -");
-        Serial.print(peak_32micros[p] * SCALING);
+        Serial.print(peak_preceding32micros[p] * SCALING);
         Serial.print(" peak ");
         Serial.println(p);
       }
       Serial.print("  ");
-      Serial.print(last_rise_micros);
+      Serial.print(last_peak_micros);
       Serial.println(" last peak");
       Serial.print("  ");
       Serial.print(now);

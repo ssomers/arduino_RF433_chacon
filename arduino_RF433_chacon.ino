@@ -6,8 +6,6 @@
 
 static const ProtocolNotice MIN_CONSIDERED_NOTICE = INVALID_PREAMBLE;
 
-static const uint8_t PIN_IN_ASK = 2;
-static const uint8_t PIN_OUT_BUZZER = 3;
 static const unsigned long LOOP_MILLIS = 50;
 static const uint8_t LOOPS_LEARNING = 128;
 static const uint8_t LOOPS_CHATTY = 0; // meaning 256
@@ -19,18 +17,14 @@ static const uint8_t LOOPS_PER_HEARTBEAT = 25;
 // Aduino on modern library
 static const bool logEvents = true;
 static const bool logTiming = false;
+enum { PIN_IN_ASK = 2, PIN_OUT_BUZZER = 10, PIN_OUT_SLOW, PIN_OUT_FAST, PIN_OUT_LED = LED_BUILTIN };
 static const int INT_IN = digitalPinToInterrupt(PIN_IN_ASK);
-static const uint8_t PIN_OUT_LED = LED_BUILTIN;
-static const uint8_t PIN_OUT_SLOW = 11;
-static const uint8_t PIN_OUT_FAST = 12;
 #else
 // ATTiny85 on ancient Digispark library
 static const bool logEvents = false;
 static const bool logTiming = false;
+enum { PIN_OUT_SLOW, PIN_OUT_FAST, PIN_IN_ASK, PIN_OUT_BUZZER, PIN_OUT_LED };
 static const int INT_IN = 0;
-static const uint8_t PIN_OUT_LED = 4;
-static const uint8_t PIN_OUT_SLOW = 0;
-static const uint8_t PIN_OUT_FAST = 1;
 #endif
 
 enum Speed : uint8_t { OFF, SLOW, FAST };
