@@ -1,5 +1,3 @@
-#include <ATtinySerialOut.h>
-
 #include "pitches.h"
 #include "ProtocolHandler.h"
 #include "TransmitterButtonStorage.h"
@@ -7,24 +5,21 @@
 static const ProtocolNotice MIN_CONSIDERED_NOTICE = INVALID_PREAMBLE;
 
 static const unsigned long LOOP_MILLIS = 50;
-static const uint8_t LOOPS_LEARNING = 128;
-static const uint8_t LOOPS_CHATTY = 0; // meaning 256
-static const uint8_t LOOPS_SPEED_UP = 20;
-static const uint8_t LOOPS_SLOW_DOWN = 2;
+static const uint8_t LOOPS_LEARNING = 80;
+static const uint8_t LOOPS_SPEED_UP = 30;
+static const uint8_t LOOPS_SLOW_DOWN = 3;
 static const uint8_t LOOPS_PER_HEARTBEAT = 25;
 
-#ifdef LED_BUILTIN
-// Aduino on modern library
+#ifdef ARDUINO_AVR_NANO
 static const bool logEvents = true;
 static const bool logTiming = false;
 enum { PIN_IN_ASK = 2, PIN_OUT_BUZZER = 10, PIN_OUT_SLOW, PIN_OUT_FAST, PIN_OUT_LED = LED_BUILTIN };
-static const int INT_IN = digitalPinToInterrupt(PIN_IN_ASK);
-#else
-// ATTiny85 on ancient Digispark library
+static const int INT_ASK = digitalPinToInterrupt(PIN_IN_ASK);
+#else // ATTiny85
 static const bool logEvents = false;
 static const bool logTiming = false;
 enum { PIN_OUT_SLOW, PIN_OUT_FAST, PIN_IN_ASK, PIN_OUT_BUZZER, PIN_OUT_LED };
-static const int INT_IN = 0;
+static const int INT_ASK = 0;
 #endif
 
 enum Speed : uint8_t { OFF, SLOW, FAST };
@@ -48,8 +43,9 @@ static Speed read_speed() {
 }
 
 
-enum LocalNotice : uint8_t { LOCALS = 128, REGISTER_ACTUAL = LOCALS, REGISTER_AGAIN, DEREGISTER_ACTUAL, DEREGISTER_AGAIN, DEREGISTER_ALL,
-                             SHUTTING_UP, GOING_NOWHERE, GOING_UP, GOING_DOWN
+enum LocalNotice : uint8_t { LOCALS = 128, MISSED_PACKET = LOCALS,
+                             REGISTER_ACTUAL, REGISTER_AGAIN, DEREGISTER_ACTUAL, DEREGISTER_AGAIN, DEREGISTER_ALL,
+                             GOING_NOWHERE, GOING_UP, GOING_DOWN
                            };
 
 static uint16_t note1(uint8_t beeps_buzzing) {
@@ -62,7 +58,7 @@ static uint16_t note1(uint8_t beeps_buzzing) {
     case GOING_NOWHERE:
     case GOING_UP:
     case GOING_DOWN:        return NOTE_E5;
-    case SHUTTING_UP:
+    case MISSED_PACKET:
     default:                return NOTE_A2;
   }
 }
@@ -77,7 +73,7 @@ static uint16_t note2(uint8_t beeps_buzzing) {
     case GOING_NOWHERE:     return NOTE_E5;
     case GOING_UP:          return NOTE_A5;
     case GOING_DOWN:        return NOTE_A4;
-    case SHUTTING_UP:       return NOTE_E2;
+    case MISSED_PACKET:     return NOTE_A2;
     default:                return NOTE_E3;
   }
 }
@@ -89,80 +85,108 @@ static uint16_t note3(uint8_t beeps_buzzing) {
     case DEREGISTER_ACTUAL: return NOTE_E4;
     case DEREGISTER_AGAIN:  return NOTE_A4;
     case DEREGISTER_ALL:    return NOTE_E3;
-    case SHUTTING_UP:       return NOTE_A1;
-    default :               return 0;
+    default:                return 0;
   }
 }
 
 static uint8_t primary_notice = 0;
 static uint32_t primary_notice_time;
 
-template <bool logEvents> struct EventLogger;
-template <> struct EventLogger<false> {
-  template <typename T> static void print(ProtocolNotice, T) {}
-  template <typename T, typename F> static void print(ProtocolNotice, T, F) {}
-  template <typename T> static void println(ProtocolNotice n, T) {
-    if (n >= MIN_CONSIDERED_NOTICE && n > primary_notice) {
-      primary_notice = n;
-      primary_notice_time = micros();
+template <bool logEvents> struct SerialOrNot_t;
+template <> struct SerialOrNot_t<false> {
+  void begin(long) {}
+  template <typename T> void print(T) {}
+  template <typename T, typename F> void print(T, F) {}
+  void println() {}
+  template <typename T> void println(T) {}
+  template <typename T> void write(T) {}
+};
+template <> struct SerialOrNot_t<true> {
+  void begin(long rate) {
+    Serial.begin(rate);
+  }
+  template <typename T> void print(T t) {
+    Serial.print(t);
+  }
+  template <typename T, typename F> void print(T t, F f) {
+    Serial.print(t, f);
+  }
+  void println() {
+    Serial.println();
+  }
+  template <typename T> void println(T t) {
+    Serial.println(t);
+  }
+  template <typename T> void write(T t) {
+    Serial.write(t);
+  }
+};
+
+static SerialOrNot_t<logEvents> SerialOrNot;
+
+struct EventLogger {
+  template <typename T> static void print(ProtocolNotice n, T t) {
+    if (n >= MIN_CONSIDERED_NOTICE) {
+      SerialOrNot.print(t);
+    }
+  }
+  template <typename T, typename F> static void print(ProtocolNotice n, T t, F f) {
+    if (n >= MIN_CONSIDERED_NOTICE) {
+      SerialOrNot.print(t, f);
+    }
+  }
+  template <typename T> static void println(ProtocolNotice n, T t) {
+    if (n >= MIN_CONSIDERED_NOTICE) {
+      SerialOrNot.println(t);
+      if (n > primary_notice) {
+        primary_notice = n;
+        primary_notice_time = micros();
+      }
     }
   }
 };
-template <> struct EventLogger<true> {
-  template <typename T> static void print(ProtocolNotice n, T t) {
-    if (n >= MIN_CONSIDERED_NOTICE) Serial.print(t);
-  }
-  template <typename T, typename F> static void print(ProtocolNotice n, T t, F f) {
-    if (n >= MIN_CONSIDERED_NOTICE) Serial.print(t, f);
-  }
-  template <typename T> static void println(ProtocolNotice n, T t) {
-    if (n >= MIN_CONSIDERED_NOTICE) Serial.println(t);
-    EventLogger<false>::println(n, t);
-  }
-};
 
-static ProtocolHandler<EventLogger<logEvents>, logTiming> handler;
+static ProtocolHandler handler;
 static TransmitterButtonStorage transmitterButtonStorage;
 
-static void print_transmitter_and_button(const char* prefix, Packet packet) {
-  Serial.print(prefix);
-  Serial.print(" transmitter ");
-  Serial.print(packet.transmitter(), HEX);
+static void dump_transmitter_and_button(const char* prefix, Packet packet) {
+  SerialOrNot.print(prefix);
+  SerialOrNot.print(" transmitter ");
+  SerialOrNot.print(packet.transmitter(), HEX);
   if (packet.multicast()) {
-    Serial.print(" all ");
+    SerialOrNot.print(" all ");
   } else {
-    Serial.print(" button ");
-    Serial.write('A' + packet.page());
-    Serial.write('1' + packet.row());
+    SerialOrNot.print(" button ");
+    SerialOrNot.write('A' + packet.page());
+    SerialOrNot.write('1' + packet.row());
   }
 }
 
 static void dump_transmitters_and_buttons(const char* prefix) {
   for (int i = 0; i < transmitterButtonStorage.count(); ++i) {
-    print_transmitter_and_button(prefix, Packet(transmitterButtonStorage.get(i)));
-    Serial.println();
+    dump_transmitter_and_button(prefix, Packet(transmitterButtonStorage.get(i)));
+    SerialOrNot.println();
   }
 }
 
 void setup() {
-  if (logEvents) {
-    Serial.begin(115200);
-  }
+  SerialOrNot.begin(115200);
 
   pinMode(PIN_IN_ASK, INPUT);
   pinMode(PIN_OUT_LED, OUTPUT);
   pinMode(PIN_OUT_BUZZER, OUTPUT);
   pinMode(PIN_OUT_SLOW, OUTPUT);
   pinMode(PIN_OUT_FAST, OUTPUT);
-  attachInterrupt(INT_IN, []() {
-    handler.handle_rise();
+  attachInterrupt(INT_ASK, []() {
+    if (!handler.handle_rise()) {
+      primary_notice = MISSED_PACKET;
+      SerialOrNot.println("Buffer not timely processed by main loop");
+    }
   }, RISING);
 
   transmitterButtonStorage.load();
-  if (logEvents) {
-    dump_transmitters_and_buttons("Initial");
-    Serial.println("Start learning");
-  }
+  dump_transmitters_and_buttons("Initial");
+  SerialOrNot.println("Start learning");
 
   tone(PIN_OUT_BUZZER, NOTE_A6, 75);
   delay(150);
@@ -181,23 +205,19 @@ static bool initial_learning() {
   }
   digitalWrite(PIN_OUT_LED, iterations & 8 ? HIGH : LOW);
 
-  const uint32_t bits = handler.receive();
+  const uint32_t bits = handler.receive<EventLogger, logTiming>();
   if (bits != VOID_BITS) {
     const Packet packet(bits);
     if (packet.multicast()) {
       if (!packet.on_or_off()) {
-        if (logEvents) {
-          Serial.println("Received wipe");
-        }
+        SerialOrNot.println("Received wipe");
         transmitterButtonStorage.forget_all();
         primary_notice = DEREGISTER_ALL;
         iterations = 0;
       }
     } else {
-      if (logEvents) {
-        print_transmitter_and_button("Received", packet);
-        Serial.println(packet.on_or_off() ? "①" : "⓪");
-      }
+      dump_transmitter_and_button("Received", packet);
+      SerialOrNot.println(packet.on_or_off() ? "①" : "⓪");
       if (packet.on_or_off()) {
         if (transmitterButtonStorage.remember(packet.transmitter_and_button())) {
           primary_notice = REGISTER_ACTUAL;
@@ -293,16 +313,16 @@ static void respond() {
     }
   }
 
-  const uint32_t bits = handler.receive();
-  if (bits != VOID_BITS) {
-
+  for (;;) {
+    const uint32_t bits = handler.receive<EventLogger, logTiming>();
+    if (bits == VOID_BITS) {
+      break;
+    }
     const Packet packet(bits);
     const bool recognized = transmitterButtonStorage.recognizes(packet);
-    if (logEvents) {
-      print_transmitter_and_button("Received", packet);
-      Serial.print(packet.on_or_off() ? "①" : "⓪");
-      Serial.println(recognized ? ", hallelujah!" : ", never mind");
-    }
+    dump_transmitter_and_button("Received", packet);
+    SerialOrNot.print(packet.on_or_off() ? "①" : "⓪");
+    SerialOrNot.println(recognized ? ", hallelujah!" : ", never mind");
     if (recognized) {
       if (packet.on_or_off()) {
         if (transition_iterations > 0) {
@@ -333,9 +353,7 @@ void loop() {
   if (!learned) {
     if (initial_learning()) {
       learned = true;
-      if (logEvents) {
-        Serial.println("Ended learning");
-      }
+      SerialOrNot.println("Ended learning");
       for (uint8_t i = transmitterButtonStorage.count(); i > 0; --i) {
         digitalWrite(PIN_OUT_LED, HIGH);
         tone(PIN_OUT_BUZZER, NOTE_A5);

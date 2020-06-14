@@ -1,62 +1,81 @@
-#include "PeakBuffer.h"
+#include "PeakArray.h"
 
-template <typename EventLogger>
+inline uint32_t duration_from_to(uint32_t early, uint32_t later) {
+  return later - early;
+}
+
+template <uint8_t BUFFERS, uint8_t PEAKS, uint8_t SCALING, uint8_t MAX_SPACING = 0xFF>
 class PeakBufferPool {
-    static const uint8_t RECEPTION_BUFFERS = 4;
     uint8_t buffer_incoming = 0;
     uint8_t buffer_outgoing = 0;
-    PeakBuffer<EventLogger> buffers[RECEPTION_BUFFERS];
+    PeakArray<PEAKS, uint8_t> buffers[BUFFERS];
+    uint32_t last_peak_micros[BUFFERS];
+    uint32_t last_probed_micros;
 
     static uint8_t next_buffer(uint8_t b) {
-      return b + 1 < RECEPTION_BUFFERS ? b + 1 : 0;
+      return b + 1 < BUFFERS ? b + 1 : 0;
+    }
+
+    bool finalize_buffer_offline(uint32_t now, uint8_t timeout) {
+      PeakArray<PEAKS, uint8_t>& buffer = buffers[buffer_outgoing];
+      if (buffer_outgoing != buffer_incoming) {
+        return true;
+      }
+      if (buffer.counted() == PEAKS) {
+        if (duration_from_to(last_peak_micros[buffer_outgoing], now) / SCALING >= timeout) {
+          buffer_incoming = next_buffer(buffer_incoming);
+          buffers[buffer_incoming].initialize_idle();
+          last_peak_micros[buffer_incoming] = last_peak_micros[buffer_outgoing];
+          return true;
+        }
+      }
+      return false;
     }
 
   public:
     PeakBufferPool() {
-      buffers[0].initialize_at_startup();
+      buffers[0].initialize_idle();
+      last_peak_micros[0] = micros();
     }
 
-    void handle_rise() {
+    bool handle_rise() {
+      bool keeping_up = true;
       const uint32_t now = micros();
-      const uint8_t preceding32micros = buffers[buffer_incoming].preceding32micros(now);
-      if (preceding32micros == 0xFF) {
-        if (buffers[buffer_incoming].has_almost_seen_packet()) {
+      const uint32_t preceding_spacing = duration_from_to(last_peak_micros[buffer_incoming], now) / SCALING;
+      if (preceding_spacing > MAX_SPACING) {
+        if (buffers[buffer_incoming].is_active() && buffers[buffer_incoming].counted() > PEAKS / 2) {
           buffer_incoming = next_buffer(buffer_incoming);
-          if (buffer_incoming == buffer_outgoing) {
-            EventLogger::println(MISSED_PACKET, "Packet not timely processed by main loop");
-          }
+          keeping_up = (buffer_incoming != buffer_outgoing);
         }
-        buffers[buffer_incoming].initialize_delimited(now);
+        buffers[buffer_incoming].initialize_active();
       } else {
-        buffers[buffer_incoming].register_peak(now, preceding32micros);
+        buffers[buffer_incoming].append(preceding_spacing);
       }
+      last_peak_micros[buffer_incoming] = now;
+      return keeping_up;
     }
 
-    PeakBuffer<EventLogger>* finalize_buffer(uint32_t micros) {
+    template <typename Receive>
+    bool finalize_buffer(uint32_t now, uint8_t timeout, Receive receive) {
       noInterrupts();
-      if (buffer_outgoing != buffer_incoming) {
-        interrupts();
-        return &buffers[buffer_outgoing];
-      } else if (buffers[buffer_incoming].appears_final_at(micros)) {
-        const uint8_t next_buffer_incoming = next_buffer(buffer_incoming);
-        buffers[next_buffer_incoming].initialize_from(buffers[buffer_incoming]);
-        buffer_incoming = next_buffer_incoming;
-        interrupts();
-        return &buffers[buffer_outgoing];
-      } else {
-        interrupts();
-        return NULL;
-      }
-    }
-
-    void mark_as_received() {
-      buffer_outgoing = next_buffer(buffer_outgoing);
-    }
-
-    uint32_t probe_last_peak_micros() const {
-      noInterrupts();
-      const uint32_t result = buffers[buffer_incoming].probe_last_peak_micros();
+      const bool ready = finalize_buffer_offline(now, timeout);
       interrupts();
-      return result;
+      if (ready) {
+        receive(buffers[buffer_outgoing], last_peak_micros[buffer_outgoing]);
+        buffer_outgoing = next_buffer(buffer_outgoing);
+      }
+      return ready;
+    }
+
+    bool has_been_alive() {
+      noInterrupts();
+      const uint32_t last = last_peak_micros[buffer_incoming];
+      interrupts();
+      if (last_probed_micros != last) {
+        last_probed_micros = last;
+        return true;
+      } else {
+        return false;
+      }
     }
 };
