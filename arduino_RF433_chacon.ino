@@ -2,11 +2,11 @@
 #include "ProtocolHandler.h"
 #include "TransmitterButtonStorage.h"
 
-static const ProtocolNotice MIN_CONSIDERED_NOTICE = INVALID_PREAMBLE;
+static const ProtocolNotice MIN_CONSIDERED_NOTICE = MISSING_N_PEAKS;
 
 static const unsigned long LOOP_MILLIS = 50;
 static const uint8_t LOOPS_LEARNING = 80;
-static const uint8_t LOOPS_SPEED_UP = 30;
+static const uint8_t LOOPS_SPEED_UP = 32;
 static const uint8_t LOOPS_SLOW_DOWN = 3;
 static const uint8_t LOOPS_PER_HEARTBEAT = 25;
 
@@ -177,6 +177,7 @@ void setup() {
   pinMode(PIN_OUT_BUZZER, OUTPUT);
   pinMode(PIN_OUT_SLOW, OUTPUT);
   pinMode(PIN_OUT_FAST, OUTPUT);
+  handler.setup();
   attachInterrupt(INT_ASK, []() {
     if (!handler.handle_rise()) {
       primary_notice = MISSED_PACKET;

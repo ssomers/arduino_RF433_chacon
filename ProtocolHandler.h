@@ -1,15 +1,15 @@
 #include "PeakBufferPool.h"
 
 enum ProtocolNotice : uint8_t { END_OF_TRAIN,
-                                INVALID_PREAMBLE = 1,
-                                MISSING_TOTAL_PEAKS = 2, EXCESS_TOTAL_PEAKS = 3,
-                                WRONG_PEAK_SPACING = 4, WRONG_PEAK_COUNT = 5,
-                                MISSING_BITS = 6, EXCESS_BITS = 7,
-                                WRONG_PARITY = 8
+                                MISSING_N_PEAKS = 1, MISSING_2_PEAKS = 2, MISSING_1_PEAK = 3, EXCESS_PEAKS = 4,
+                                INVALID_PREAMBLE = 5,
+                                WRONG_PEAK_SPACING = 6, WRONG_ADJACENT_PEAK_COUNT = 7,
+                                MISSING_BITS = 8, EXCESS_BITS = 9,
+                                WRONG_PARITY = 10
                               };
 
 static const uint8_t BUFFERS = 4;
-static const uint8_t PEAKS = 65;
+static const uint8_t PEAKS = 65; // internal peaks (or the gaps leading up to them), excluding the delimiter peak
 static const uint8_t SCALING = 32; // enough for spacing to max out on delimiters
 
 static const uint32_t TRAIN_TIMEOUT = 0x50000;
@@ -57,13 +57,16 @@ class ProtocolHandler {
     static uint32_t decode(PeakArray<PEAKS, uint8_t> const& buffer) {
       const uint8_t peak_count = buffer.counted();
       if (peak_count > PEAKS) {
-        EventLogger::print(EXCESS_TOTAL_PEAKS, peak_count);
-        EventLogger::println(EXCESS_TOTAL_PEAKS, " peaks in a packet");
+        EventLogger::print(EXCESS_PEAKS, peak_count);
+        EventLogger::println(EXCESS_PEAKS, " peaks in a packet");
         return VOID_BITS;
       }
       if (peak_count < PEAKS) {
-        EventLogger::print(MISSING_TOTAL_PEAKS, peak_count);
-        EventLogger::println(MISSING_TOTAL_PEAKS, " peaks in a packet");
+        const ProtocolNotice notice = peak_count == PEAKS - 1 ? MISSING_1_PEAK :
+                                      peak_count == PEAKS - 2 ? MISSING_2_PEAKS :
+                                      MISSING_N_PEAKS;
+        EventLogger::print(notice, peak_count);
+        EventLogger::println(notice, " peaks in a packet");
         return VOID_BITS;
       }
 
@@ -98,7 +101,7 @@ class ProtocolHandler {
         return VOID_BITS;
       }
       if (bit_errors) {
-        EventLogger::println(WRONG_PEAK_COUNT, "Wrong number of adjacent peaks");
+        EventLogger::println(WRONG_ADJACENT_PEAK_COUNT, "Wrong number of adjacent peaks");
         return VOID_BITS;
       }
       if (bitcount < 32) {
@@ -120,7 +123,8 @@ class ProtocolHandler {
     }
 
   public:
-    ProtocolHandler() {
+    void setup() {
+      peak_buffer_pool.setup();
       train_handled.bits_received = VOID_BITS;
     }
 
@@ -144,7 +148,7 @@ class ProtocolHandler {
         train_received.time_received = time_received;
       };
 
-      while (peak_buffer_pool.finalize_buffer(now, PACKET_FINAL_TIMEOUT, receive)) {
+      while (peak_buffer_pool.receive_buffer(now, PACKET_FINAL_TIMEOUT, receive)) {
         if (train_received.bits_received != VOID_BITS) {
           if (train_received.bits_received != train_handled.bits_received) { // not just a repeat in the same train
             train_handled = train_received;

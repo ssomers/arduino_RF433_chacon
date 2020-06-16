@@ -4,26 +4,16 @@ class PeakArray {
     T values[STORED];
 
   public:
-    void initialize_idle() {
-      count = 0xFF;
-    }
-
-    void initialize_active() {
+    void initialize() {
       count = 0;
     }
 
     void append(uint8_t value) {
-      if (is_active()) {
-        if (count < STORED) {
-          values[count] = value;
-        }
-        ++count;
-        // if we get so many consecutive appends that count saturates, just pretend we are idle
+      if (count < STORED) {
+        values[count] = value;
       }
-    }
-
-    bool is_active() const {
-      return count != 0xFF;
+      ++count;
+      // never mind that we might get 256 or more consecutive appends
     }
 
     uint8_t counted() const {

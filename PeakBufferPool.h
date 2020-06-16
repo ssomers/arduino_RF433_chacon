@@ -6,8 +6,9 @@ inline uint32_t duration_from_to(uint32_t early, uint32_t later) {
 
 template <uint8_t BUFFERS, uint8_t PEAKS, uint8_t SCALING, uint8_t MAX_SPACING = 0xFF>
 class PeakBufferPool {
-    uint8_t buffer_incoming = 0;
-    uint8_t buffer_outgoing = 0;
+    bool ever_delimited;
+    uint8_t buffer_incoming;
+    uint8_t buffer_outgoing;
     PeakArray<PEAKS, uint8_t> buffers[BUFFERS];
     uint32_t last_peak_micros[BUFFERS];
     uint32_t last_probed_micros;
@@ -22,10 +23,11 @@ class PeakBufferPool {
         return true;
       }
       if (buffer.counted() == PEAKS) {
-        if (duration_from_to(last_peak_micros[buffer_outgoing], now) / SCALING >= timeout) {
+        const int32_t last = last_peak_micros[buffer_outgoing];
+        if (duration_from_to(last, now) / SCALING >= timeout) {
           buffer_incoming = next_buffer(buffer_incoming);
-          buffers[buffer_incoming].initialize_idle();
-          last_peak_micros[buffer_incoming] = last_peak_micros[buffer_outgoing];
+          buffers[buffer_incoming].initialize();
+          last_peak_micros[buffer_incoming] = last;
           return true;
         }
       }
@@ -33,9 +35,11 @@ class PeakBufferPool {
     }
 
   public:
-    PeakBufferPool() {
-      buffers[0].initialize_idle();
-      last_peak_micros[0] = micros();
+    void setup() {
+      buffer_incoming = 0;
+      buffer_outgoing = 0;
+      buffers[buffer_incoming].initialize();
+      last_peak_micros[buffer_incoming] = micros();
     }
 
     bool handle_rise() {
@@ -43,12 +47,13 @@ class PeakBufferPool {
       const uint32_t now = micros();
       const uint32_t preceding_spacing = duration_from_to(last_peak_micros[buffer_incoming], now) / SCALING;
       if (preceding_spacing > MAX_SPACING) {
-        if (buffers[buffer_incoming].is_active() && buffers[buffer_incoming].counted() > PEAKS / 2) {
+        ever_delimited = true;
+        if (buffers[buffer_incoming].counted() > PEAKS / 2) {
           buffer_incoming = next_buffer(buffer_incoming);
           keeping_up = (buffer_incoming != buffer_outgoing);
         }
-        buffers[buffer_incoming].initialize_active();
-      } else {
+        buffers[buffer_incoming].initialize();
+      } else if (ever_delimited) {
         buffers[buffer_incoming].append(preceding_spacing);
       }
       last_peak_micros[buffer_incoming] = now;
@@ -56,7 +61,7 @@ class PeakBufferPool {
     }
 
     template <typename Receive>
-    bool finalize_buffer(uint32_t now, uint8_t timeout, Receive receive) {
+    bool receive_buffer(uint32_t now, uint8_t timeout, Receive receive) {
       noInterrupts();
       const bool ready = finalize_buffer_offline(now, timeout);
       interrupts();
