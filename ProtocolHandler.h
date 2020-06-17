@@ -1,18 +1,21 @@
 #include "PeakBufferPool.h"
 
-enum ProtocolNotice : uint8_t { END_OF_TRAIN,
-                                MISSING_N_PEAKS = 1, MISSING_2_PEAKS = 2, MISSING_1_PEAK = 3, EXCESS_PEAKS = 4,
-                                INVALID_PREAMBLE = 5,
-                                WRONG_PEAK_SPACING = 6, WRONG_ADJACENT_PEAK_COUNT = 7,
-                                MISSING_BITS = 8, EXCESS_BITS = 9,
-                                WRONG_PARITY = 10
+enum ProtocolNotice : uint8_t { NONE,
+                                MISSING_N_PEAKS = 0 + 4,
+                                MISSING_2_PEAKS = 5 + 2,
+                                MISSING_1_PEAK = 10 + 1,
+                                EXCESS_PEAKS = 13,
+                                INVALID_PREAMBLE = 15,
+                                WRONG_PEAK_SPACING = 16, WRONG_ADJACENT_PEAK_COUNT = 17,
+                                MISSING_BITS = 18, EXCESS_BITS = 19,
+                                WRONG_PARITY = 20
                               };
 
 static const uint8_t BUFFERS = 4;
 static const uint8_t PEAKS = 65; // internal peaks (or the gaps leading up to them), excluding the delimiter peak
 static const uint8_t SCALING = 32; // enough for spacing to max out on delimiters
 
-static const uint32_t TRAIN_TIMEOUT = 0x50000;
+static const uint32_t TRAIN_TIMEOUT = 360000; // in µs
 
 static const uint32_t VOID_BITS = ~0ul;
 
@@ -54,26 +57,33 @@ class ProtocolHandler {
     }
 
     template <typename EventLogger>
-    static uint32_t decode(PeakArray<PEAKS, uint8_t> const& buffer) {
+    static uint32_t decode(PeakArray<PEAKS, uint8_t> const& buffer, bool log_errors) {
       const uint8_t peak_count = buffer.counted();
       if (peak_count > PEAKS) {
-        EventLogger::print(EXCESS_PEAKS, peak_count);
-        EventLogger::println(EXCESS_PEAKS, " peaks in a packet");
+        if (log_errors) {
+          EventLogger::print(EXCESS_PEAKS, peak_count);
+          EventLogger::println(EXCESS_PEAKS, " peaks in a packet");
+        }
         return VOID_BITS;
       }
       if (peak_count < PEAKS) {
-        const ProtocolNotice notice = peak_count == PEAKS - 1 ? MISSING_1_PEAK :
-                                      peak_count == PEAKS - 2 ? MISSING_2_PEAKS :
-                                      MISSING_N_PEAKS;
-        EventLogger::print(notice, peak_count);
-        EventLogger::println(notice, " peaks in a packet");
+        if (log_errors) {
+          const ProtocolNotice notice = peak_count == PEAKS - 1 ? MISSING_1_PEAK :
+                                        peak_count == PEAKS - 2 ? MISSING_2_PEAKS :
+                                        MISSING_N_PEAKS;
+          EventLogger::print(notice, peak_count);
+          EventLogger::println(notice, " peaks in a packet");
+        }
         return VOID_BITS;
       }
 
       const uint8_t preamble = buffer.value(0);
       if (preamble < MIN_PACKET_PREAMBLE || preamble > MAX_PACKET_PREAMBLE) {
-        EventLogger::print(INVALID_PREAMBLE, preamble);
-        EventLogger::println(INVALID_PREAMBLE, "µs preamble after delimiter");
+        if (log_errors) {
+
+          EventLogger::print(INVALID_PREAMBLE, preamble);
+          EventLogger::println(INVALID_PREAMBLE, "µs preamble after delimiter");
+        }
         return VOID_BITS;
       }
 
@@ -97,26 +107,36 @@ class ProtocolHandler {
         }
       }
       if (spacing_errors) {
-        EventLogger::println(WRONG_PEAK_SPACING, "Peak spacing wildly out of whack");
+        if (log_errors) {
+          EventLogger::println(WRONG_PEAK_SPACING, "Peak spacing wildly out of whack");
+        }
         return VOID_BITS;
       }
       if (bit_errors) {
-        EventLogger::println(WRONG_ADJACENT_PEAK_COUNT, "Wrong number of adjacent peaks");
+        if (log_errors) {
+          EventLogger::println(WRONG_ADJACENT_PEAK_COUNT, "Wrong number of adjacent peaks");
+        }
         return VOID_BITS;
       }
       if (bitcount < 32) {
-        EventLogger::print(MISSING_BITS, "#bits=");
-        EventLogger::println(MISSING_BITS, bitcount);
+        if (log_errors) {
+          EventLogger::print(MISSING_BITS, "#bits=");
+          EventLogger::println(MISSING_BITS, bitcount);
+        }
         return VOID_BITS;
       }
       if (bitcount > 32) {
-        EventLogger::print(EXCESS_BITS, "#bits=");
-        EventLogger::println(EXCESS_BITS, bitcount);
+        if (log_errors) {
+          EventLogger::print(EXCESS_BITS, "#bits=");
+          EventLogger::println(EXCESS_BITS, bitcount);
+        }
         return VOID_BITS;
       }
       if (extra_adjacent_peaks != (bits_received & 1)) {
-        EventLogger::print(WRONG_PARITY, "Incorrect #parity peaks ");
-        EventLogger::println(WRONG_PARITY, 1 + extra_adjacent_peaks);
+        if (log_errors) {
+          EventLogger::print(WRONG_PARITY, "Incorrect #parity peaks ");
+          EventLogger::println(WRONG_PARITY, 1 + extra_adjacent_peaks);
+        }
         return VOID_BITS;
       }
       return bits_received;
@@ -124,8 +144,10 @@ class ProtocolHandler {
 
   public:
     void setup() {
-      peak_buffer_pool.setup();
+      const uint32_t now = micros();
+      peak_buffer_pool.setup(now);
       train_handled.bits_received = VOID_BITS;
+      train_handled.time_received = now;
     }
 
     bool handle_rise() {
@@ -139,27 +161,25 @@ class ProtocolHandler {
     template <typename EventLogger, bool logTiming>
     uint32_t receive() {
       const uint32_t now = micros();
+      const uint32_t previous_time_received = train_handled.time_received;
       Train train_received;
-      auto receive = [&train_received, now] (PeakArray<PEAKS, uint8_t> const& buffer, uint32_t time_received) {
+      auto receive = [&train_received, previous_time_received, now] (PeakArray<PEAKS, uint8_t> const& buffer, uint32_t time_received) {
         if (logTiming) {
           dump(buffer, time_received, now);
         }
-        train_received.bits_received = decode<EventLogger>(buffer);
+        const bool log_errors = duration_from_to(previous_time_received, time_received) >= TRAIN_TIMEOUT;
+        train_received.bits_received = decode<EventLogger>(buffer, log_errors);
         train_received.time_received = time_received;
       };
 
       while (peak_buffer_pool.receive_buffer(now, PACKET_FINAL_TIMEOUT, receive)) {
         if (train_received.bits_received != VOID_BITS) {
-          if (train_received.bits_received != train_handled.bits_received) { // not just a repeat in the same train
+          if (train_received.bits_received != train_handled.bits_received ||
+              duration_from_to(train_handled.time_received, train_received.time_received) >= TRAIN_TIMEOUT) {
+            // not just a repeat in the same train
             train_handled = train_received;
             return train_handled.bits_received;
           }
-        }
-      }
-      if (train_handled.bits_received != VOID_BITS) {
-        if (duration_from_to(train_handled.time_received, now) > TRAIN_TIMEOUT) {
-          train_handled.bits_received = VOID_BITS;
-          EventLogger::println(END_OF_TRAIN, "Stop expecting rest of packet train");
         }
       }
       return VOID_BITS;

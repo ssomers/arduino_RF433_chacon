@@ -2,46 +2,75 @@
 #include "ProtocolHandler.h"
 #include "TransmitterButtonStorage.h"
 
-static const ProtocolNotice MIN_CONSIDERED_NOTICE = MISSING_N_PEAKS;
-
 static const unsigned long LOOP_MILLIS = 50;
 static const uint8_t LOOPS_LEARNING = 80;
-static const uint8_t LOOPS_SPEED_UP = 32;
+static const uint8_t LOOPS_SPEED_UP = 33;
 static const uint8_t LOOPS_SLOW_DOWN = 3;
 static const uint8_t LOOPS_PER_HEARTBEAT = 25;
 
 #ifdef ARDUINO_AVR_NANO
-static const bool logEvents = true;
-static const bool logTiming = false;
+static const bool LOG_EVENTS = true;
+static const bool LOG_TIMING = false;
 enum { PIN_IN_ASK = 2, PIN_OUT_BUZZER = 10, PIN_OUT_SLOW, PIN_OUT_FAST, PIN_OUT_LED = LED_BUILTIN };
 static const int INT_ASK = digitalPinToInterrupt(PIN_IN_ASK);
 #else // ATTiny85
-static const bool logEvents = false;
-static const bool logTiming = false;
+static const bool LOG_EVENTS = false;
+static const bool LOG_TIMING = false;
 enum { PIN_OUT_SLOW, PIN_OUT_FAST, PIN_IN_ASK, PIN_OUT_BUZZER, PIN_OUT_LED };
 static const int INT_ASK = 0;
 #endif
 
-enum Speed : uint8_t { OFF, SLOW, FAST };
+class SpeedRegulator {
+    uint8_t transition_iterations = 0;
 
-static void write_speed(Speed speed) {
-  // Make sure that at no point both output pins are high
-  if (speed != SLOW) digitalWrite(PIN_OUT_SLOW, LOW);
-  if (speed != FAST) digitalWrite(PIN_OUT_FAST, LOW);
-  if (speed == SLOW) digitalWrite(PIN_OUT_SLOW, HIGH);
-  if (speed == FAST) digitalWrite(PIN_OUT_FAST, HIGH);
-}
+    enum Speed : uint8_t { OFF, SLOW, FAST };
+    static void write_speed(Speed speed) {
+      // Make sure that at no point both output pins are high
+      if (speed != SLOW) digitalWrite(PIN_OUT_SLOW, LOW);
+      if (speed != FAST) digitalWrite(PIN_OUT_FAST, LOW);
+      if (speed == SLOW) digitalWrite(PIN_OUT_SLOW, HIGH);
+      if (speed == FAST) digitalWrite(PIN_OUT_FAST, HIGH);
+    }
 
-static Speed read_speed() {
-  if (digitalRead(PIN_OUT_FAST)) {
-    return FAST;
-  } else if (digitalRead(PIN_OUT_SLOW)) {
-    return SLOW;
-  } else {
-    return OFF;
-  }
-}
+    static bool is_fast() {
+      return digitalRead(PIN_OUT_FAST);
+    }
 
+    static bool is_slow() {
+      return digitalRead(PIN_OUT_SLOW);
+    }
+
+  public:
+    void step() {
+      if (transition_iterations > 0) {
+        if (--transition_iterations == 0) {
+          if (is_slow()) {
+            write_speed(FAST);
+          } else {
+            write_speed(SLOW);
+          }
+        }
+      }
+    }
+
+    void speed_up() {
+      if (transition_iterations > 0) {
+        transition_iterations = 0;
+      } else if (!is_slow() && !is_fast()) {
+        transition_iterations = LOOPS_SPEED_UP;
+      }
+      write_speed(FAST);
+    }
+
+    void slow_down() {
+      if (transition_iterations > 0) {
+        transition_iterations = 0;
+      } else if (is_fast()) {
+        transition_iterations = LOOPS_SLOW_DOWN;
+      }
+      write_speed(OFF);
+    }
+};
 
 enum LocalNotice : uint8_t { LOCALS = 128, MISSED_PACKET = LOCALS,
                              REGISTER_ACTUAL, REGISTER_AGAIN, DEREGISTER_ACTUAL, DEREGISTER_AGAIN, DEREGISTER_ALL,
@@ -89,10 +118,10 @@ static uint16_t note3(uint8_t beeps_buzzing) {
   }
 }
 
-static uint8_t primary_notice = 0;
+static volatile uint8_t primary_notice = 0;
 static uint32_t primary_notice_time;
 
-template <bool logEvents> struct SerialOrNot_t;
+template <bool enable> struct SerialOrNot_t;
 template <> struct SerialOrNot_t<false> {
   void begin(long) {}
   template <typename T> void print(T) {}
@@ -122,21 +151,21 @@ template <> struct SerialOrNot_t<true> {
   }
 };
 
-static SerialOrNot_t<logEvents> SerialOrNot;
+static SerialOrNot_t<LOG_EVENTS> SerialOrNot;
 
 struct EventLogger {
   template <typename T> static void print(ProtocolNotice n, T t) {
-    if (n >= MIN_CONSIDERED_NOTICE) {
+    if (n > 0) {
       SerialOrNot.print(t);
     }
   }
   template <typename T, typename F> static void print(ProtocolNotice n, T t, F f) {
-    if (n >= MIN_CONSIDERED_NOTICE) {
+    if (n > 0) {
       SerialOrNot.print(t, f);
     }
   }
   template <typename T> static void println(ProtocolNotice n, T t) {
-    if (n >= MIN_CONSIDERED_NOTICE) {
+    if (n > 0) {
       SerialOrNot.println(t);
       if (n > primary_notice) {
         primary_notice = n;
@@ -193,49 +222,51 @@ void setup() {
   delay(150);
 }
 
-static bool initial_learning() {
-  static uint8_t iterations = 0;
-
-  ++iterations;
-  if (iterations == LOOPS_LEARNING) {
-    transmitterButtonStorage.store();
-    if (transmitterButtonStorage.count() > 0) {
+static bool learn(Packet packet) {
+  if (packet.multicast()) {
+    if (!packet.on_or_off()) {
+      SerialOrNot.println("Received wipe");
+      transmitterButtonStorage.forget_all();
+      primary_notice = DEREGISTER_ALL;
       return true;
     }
-    iterations = 0;
-  }
-  digitalWrite(PIN_OUT_LED, iterations & 8 ? HIGH : LOW);
-
-  const uint32_t bits = handler.receive<EventLogger, logTiming>();
-  if (bits != VOID_BITS) {
-    const Packet packet(bits);
-    if (packet.multicast()) {
-      if (!packet.on_or_off()) {
-        SerialOrNot.println("Received wipe");
-        transmitterButtonStorage.forget_all();
-        primary_notice = DEREGISTER_ALL;
-        iterations = 0;
+  } else {
+    dump_transmitter_and_button("Received", packet);
+    SerialOrNot.println(packet.on_or_off() ? "①" : "⓪");
+    if (packet.on_or_off()) {
+      if (transmitterButtonStorage.remember(packet.transmitter_and_button())) {
+        primary_notice = REGISTER_ACTUAL;
+      } else {
+        primary_notice = REGISTER_AGAIN;
       }
     } else {
-      dump_transmitter_and_button("Received", packet);
-      SerialOrNot.println(packet.on_or_off() ? "①" : "⓪");
-      if (packet.on_or_off()) {
-        if (transmitterButtonStorage.remember(packet.transmitter_and_button())) {
-          primary_notice = REGISTER_ACTUAL;
-        } else {
-          primary_notice = REGISTER_AGAIN;
-        }
+      if (transmitterButtonStorage.forget(packet.transmitter_and_button())) {
+        primary_notice = DEREGISTER_ACTUAL;
       } else {
-        if (transmitterButtonStorage.forget(packet.transmitter_and_button())) {
-          primary_notice = DEREGISTER_ACTUAL;
-        } else {
-          primary_notice = DEREGISTER_AGAIN;
-        }
+        primary_notice = DEREGISTER_AGAIN;
       }
-      iterations = 0;
     }
+    return true;
   }
   return false;
+}
+
+static bool end_learning() {
+  transmitterButtonStorage.store();
+  if (transmitterButtonStorage.count() == 0) {
+    return false;
+  } else {
+    SerialOrNot.println("Ended learning");
+    for (uint8_t i = transmitterButtonStorage.count(); i > 0; --i) {
+      digitalWrite(PIN_OUT_LED, HIGH);
+      tone(PIN_OUT_BUZZER, NOTE_A5);
+      delay(50);
+      noTone(PIN_OUT_BUZZER);
+      digitalWrite(PIN_OUT_LED, LOW);
+      delay(25);
+    }
+    return true;
+  }
 }
 
 static void heartbeat() {
@@ -262,16 +293,18 @@ static void buzz_primary_notice() {
   static uint8_t beeps_buzzing = 0;
   static uint8_t iterations;
 
-  if (primary_notice >= LOCALS) {
-    beeps_buzzing = primary_notice;
-    primary_notice = 0;
-    iterations = 0;
-  } else if (beeps_buzzing == 0 && primary_notice > 0) {
-    // postpone notice until we're sure it isn't going to be cancelled by a properly received packet
-    if (duration_from_to(primary_notice_time, micros()) > TRAIN_TIMEOUT) {
+  if (primary_notice > 0) {
+    if (primary_notice >= LOCALS) {
       beeps_buzzing = primary_notice;
       primary_notice = 0;
       iterations = 0;
+    } else if (beeps_buzzing == 0) {
+      // postpone notice until we're sure it isn't going to be cancelled by a properly received packet
+      if (duration_from_to(primary_notice_time, micros()) >= TRAIN_TIMEOUT) {
+        beeps_buzzing = primary_notice;
+        primary_notice = 0;
+        iterations = 0;
+      }
     }
   }
 
@@ -283,17 +316,16 @@ static void buzz_primary_notice() {
       case 3:
         tone(PIN_OUT_BUZZER, note2(beeps_buzzing), beeps_buzzing < 5 ? 25 : 100);
         break;
-      case 5:
-        if (beeps_buzzing >= LOCALS && !note3(beeps_buzzing)) {
-          beeps_buzzing = 0;
+      case 6:
+        if (beeps_buzzing >= LOCALS) {
+          if (note3(beeps_buzzing)) {
+            tone(PIN_OUT_BUZZER, note3(beeps_buzzing), 60);
+          } else {
+            beeps_buzzing = 0;
+          }
         } else if (beeps_buzzing < 5) {
           beeps_buzzing -= 1;
           iterations = 2;
-        }
-        break;
-      case 6:
-        if (beeps_buzzing >= LOCALS) {
-          tone(PIN_OUT_BUZZER, note3(beeps_buzzing), 60);
         } else {
           beeps_buzzing -= 5;
           iterations = 2;
@@ -306,67 +338,53 @@ static void buzz_primary_notice() {
   }
 }
 
-static void respond() {
-  static uint8_t transition_iterations = 0;
-  if (transition_iterations > 0) {
-    if (--transition_iterations == 0) {
-      write_speed(read_speed() == SLOW ? FAST : SLOW);
+void loop() {
+  static uint8_t iterations_learning = 0;
+  static SpeedRegulator speed_regulator;
+
+  delay(LOOP_MILLIS); // save energy & provide good enough intervals
+
+  if (iterations_learning <= LOOPS_LEARNING) {
+    ++iterations_learning;
+    if (iterations_learning > LOOPS_LEARNING) {
+      if (end_learning()) {
+        SerialOrNot.println("Ended learning");
+      } else {
+        iterations_learning = 0;
+      }
     }
+  }
+
+  if (iterations_learning <= LOOPS_LEARNING) {
+    digitalWrite(PIN_OUT_LED, iterations_learning & 8 ? HIGH : LOW);
+  } else {
+    heartbeat();
   }
 
   for (;;) {
-    const uint32_t bits = handler.receive<EventLogger, logTiming>();
+    const uint32_t bits = handler.receive<EventLogger, LOG_TIMING>();
     if (bits == VOID_BITS) {
       break;
     }
-    const Packet packet(bits);
+    const Packet packet { bits };
     const bool recognized = transmitterButtonStorage.recognizes(packet);
     dump_transmitter_and_button("Received", packet);
-    SerialOrNot.print(packet.on_or_off() ? "①" : "⓪");
-    SerialOrNot.println(recognized ? ", hallelujah!" : ", never mind");
-    if (recognized) {
-      if (packet.on_or_off()) {
-        if (transition_iterations > 0) {
-          transition_iterations = 0;
-        } else if (read_speed() == OFF) {
-          transition_iterations = LOOPS_SPEED_UP;
-        }
-        write_speed(FAST);
-      } else {
-        if (transition_iterations > 0) {
-          transition_iterations = 0;
-        } else if (read_speed() == FAST) {
-          transition_iterations = LOOPS_SLOW_DOWN;
-        }
-        write_speed(OFF);
+    SerialOrNot.println(packet.on_or_off() ? "①" : "⓪");
+    if (iterations_learning <= LOOPS_LEARNING) {
+      if (learn(packet)) {
+        iterations_learning = 0;
       }
-      primary_notice = packet.on_or_off() ? GOING_UP : GOING_DOWN;
-    } else {
+    } else if (!recognized) {
       primary_notice = GOING_NOWHERE; // also wipe errors from initial packet(s) in packet train
+    } else if (packet.on_or_off()) {
+      primary_notice = GOING_UP;
+      speed_regulator.speed_up();
+    } else {
+      primary_notice = GOING_DOWN;
+      speed_regulator.slow_down();
     }
   }
-}
 
-void loop() {
-  delay(LOOP_MILLIS); // save energy & provide good enough intervals
-
-  static bool learned = false;
-  if (!learned) {
-    if (initial_learning()) {
-      learned = true;
-      SerialOrNot.println("Ended learning");
-      for (uint8_t i = transmitterButtonStorage.count(); i > 0; --i) {
-        digitalWrite(PIN_OUT_LED, HIGH);
-        tone(PIN_OUT_BUZZER, NOTE_A5);
-        delay(50);
-        noTone(PIN_OUT_BUZZER);
-        digitalWrite(PIN_OUT_LED, LOW);
-        delay(25);
-      }
-    }
-  } else {
-    heartbeat();
-    respond();
-  }
+  speed_regulator.step();
   buzz_primary_notice();
 }

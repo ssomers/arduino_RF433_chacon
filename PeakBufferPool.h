@@ -6,7 +6,6 @@ inline uint32_t duration_from_to(uint32_t early, uint32_t later) {
 
 template <uint8_t BUFFERS, uint8_t PEAKS, uint8_t SCALING, uint8_t MAX_SPACING = 0xFF>
 class PeakBufferPool {
-    bool ever_delimited;
     uint8_t buffer_incoming;
     uint8_t buffer_outgoing;
     PeakArray<PEAKS, uint8_t> buffers[BUFFERS];
@@ -35,11 +34,11 @@ class PeakBufferPool {
     }
 
   public:
-    void setup() {
+    void setup(uint32_t now) {
       buffer_incoming = 0;
       buffer_outgoing = 0;
       buffers[buffer_incoming].initialize();
-      last_peak_micros[buffer_incoming] = micros();
+      last_peak_micros[buffer_incoming] = now;
     }
 
     bool handle_rise() {
@@ -47,13 +46,12 @@ class PeakBufferPool {
       const uint32_t now = micros();
       const uint32_t preceding_spacing = duration_from_to(last_peak_micros[buffer_incoming], now) / SCALING;
       if (preceding_spacing > MAX_SPACING) {
-        ever_delimited = true;
         if (buffers[buffer_incoming].counted() > PEAKS / 2) {
           buffer_incoming = next_buffer(buffer_incoming);
           keeping_up = (buffer_incoming != buffer_outgoing);
         }
         buffers[buffer_incoming].initialize();
-      } else if (ever_delimited) {
+      } else {
         buffers[buffer_incoming].append(preceding_spacing);
       }
       last_peak_micros[buffer_incoming] = now;
