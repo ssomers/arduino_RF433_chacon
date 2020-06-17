@@ -72,7 +72,7 @@ class SpeedRegulator {
     }
 };
 
-enum LocalNotice : uint8_t { LOCALS = 128, MISSED_PACKET = LOCALS,
+enum LocalNotice : uint8_t { PRIORITY_NOTICES = 128, MISSED_PACKET = PRIORITY_NOTICES,
                              REGISTER_ACTUAL, REGISTER_AGAIN, DEREGISTER_ACTUAL, DEREGISTER_AGAIN, DEREGISTER_ALL,
                              GOING_NOWHERE, GOING_UP, GOING_DOWN
                            };
@@ -121,6 +121,12 @@ static uint16_t note3(uint8_t beeps_buzzing) {
 static volatile uint8_t primary_notice = 0;
 static uint32_t primary_notice_time;
 
+// The first packet in a train is practically always broken. Don't publish any error
+// until we're sure it's not superseded by a properly received packet in the same train:
+static bool is_time_to_publish() {
+  return duration_from_to(primary_notice_time, micros()) >= TRAIN_TIMEOUT;
+}
+
 template <bool enable> struct SerialOrNot_t;
 template <> struct SerialOrNot_t<false> {
   void begin(long) {}
@@ -154,21 +160,21 @@ template <> struct SerialOrNot_t<true> {
 static SerialOrNot_t<LOG_EVENTS> SerialOrNot;
 
 struct EventLogger {
-  template <typename T> static void print(ProtocolNotice n, T t) {
-    if (n > 0) {
+  template <typename T> static void print(uint8_t notice, T t) {
+    if (notice > 0) {
       SerialOrNot.print(t);
     }
   }
-  template <typename T, typename F> static void print(ProtocolNotice n, T t, F f) {
-    if (n > 0) {
+  template <typename T, typename F> static void print(uint8_t notice, T t, F f) {
+    if (notice > 0) {
       SerialOrNot.print(t, f);
     }
   }
-  template <typename T> static void println(ProtocolNotice n, T t) {
-    if (n > 0) {
+  template <typename T> static void println(uint8_t notice, T t) {
+    if (notice > 0) {
       SerialOrNot.println(t);
-      if (n > primary_notice) {
-        primary_notice = n;
+      if (notice > primary_notice) {
+        primary_notice = notice;
         primary_notice_time = micros();
       }
     }
@@ -290,21 +296,14 @@ static void heartbeat() {
 }
 
 static void buzz_primary_notice() {
-  static uint8_t beeps_buzzing = 0;
-  static uint8_t iterations;
+  static uint8_t beeps_buzzing = 0; // one of the PRIORITY_NOTICES, or number of beeps remaining to sound
+  static uint8_t iterations; // active when beeps_buzzing > 0
 
   if (primary_notice > 0) {
-    if (primary_notice >= LOCALS) {
+    if (primary_notice >= PRIORITY_NOTICES || (!beeps_buzzing && is_time_to_publish())) {
       beeps_buzzing = primary_notice;
       primary_notice = 0;
       iterations = 0;
-    } else if (beeps_buzzing == 0) {
-      // postpone notice until we're sure it isn't going to be cancelled by a properly received packet
-      if (duration_from_to(primary_notice_time, micros()) >= TRAIN_TIMEOUT) {
-        beeps_buzzing = primary_notice;
-        primary_notice = 0;
-        iterations = 0;
-      }
     }
   }
 
@@ -317,7 +316,7 @@ static void buzz_primary_notice() {
         tone(PIN_OUT_BUZZER, note2(beeps_buzzing), beeps_buzzing < 5 ? 25 : 100);
         break;
       case 6:
-        if (beeps_buzzing >= LOCALS) {
+        if (beeps_buzzing >= PRIORITY_NOTICES) {
           if (note3(beeps_buzzing)) {
             tone(PIN_OUT_BUZZER, note3(beeps_buzzing), 60);
           } else {
@@ -339,43 +338,39 @@ static void buzz_primary_notice() {
 }
 
 void loop() {
-  static uint8_t iterations_learning = 0;
+  static uint8_t iterations_learning = LOOPS_LEARNING;
   static SpeedRegulator speed_regulator;
 
   delay(LOOP_MILLIS); // save energy & provide good enough intervals
 
-  if (iterations_learning <= LOOPS_LEARNING) {
-    ++iterations_learning;
-    if (iterations_learning > LOOPS_LEARNING) {
+  if (iterations_learning > 0) {
+    if (--iterations_learning == 0) {
       if (end_learning()) {
         SerialOrNot.println("Ended learning");
       } else {
-        iterations_learning = 0;
+        iterations_learning = 1;
       }
     }
   }
 
-  if (iterations_learning <= LOOPS_LEARNING) {
+  if (iterations_learning > 0) {
     digitalWrite(PIN_OUT_LED, iterations_learning & 8 ? HIGH : LOW);
   } else {
     heartbeat();
   }
 
-  for (;;) {
-    const uint32_t bits = handler.receive<EventLogger, LOG_TIMING>();
-    if (bits == VOID_BITS) {
-      break;
-    }
+  uint32_t bits;
+  while (handler.receive<EventLogger, LOG_TIMING>(bits)) {
     const Packet packet { bits };
     const bool recognized = transmitterButtonStorage.recognizes(packet);
     dump_transmitter_and_button("Received", packet);
     SerialOrNot.println(packet.on_or_off() ? "①" : "⓪");
-    if (iterations_learning <= LOOPS_LEARNING) {
+    if (iterations_learning > 0) {
       if (learn(packet)) {
-        iterations_learning = 0;
+        iterations_learning = LOOPS_LEARNING;
       }
     } else if (!recognized) {
-      primary_notice = GOING_NOWHERE; // also wipe errors from initial packet(s) in packet train
+      primary_notice = GOING_NOWHERE; // also supersede errors from initial packet(s) in the packet train
     } else if (packet.on_or_off()) {
       primary_notice = GOING_UP;
       speed_regulator.speed_up();
