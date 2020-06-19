@@ -5,15 +5,15 @@ inline uint32_t duration_from_to(uint32_t early, uint32_t later) {
 }
 
 template <uint8_t BUFFERS, uint8_t PEAKS, uint8_t SCALING, uint8_t PACKET_FINAL_TIMEOUT, uint8_t MAX_SPACING>
-class PeakBufferPool {
+class PeakArrayPool {
   public:
     using Spacing = uint8_t;
     using Buffer = PeakArray<PEAKS, Spacing>;
 
   private:
+    Buffer buffers[BUFFERS];
     uint8_t buffer_incoming;
     uint8_t buffer_outgoing;
-    Buffer buffers[BUFFERS];
     uint32_t last_peak_micros[BUFFERS];
     uint32_t last_probed_micros;
 
@@ -22,15 +22,14 @@ class PeakBufferPool {
     }
 
     bool finalize_buffer_offline(uint32_t now) {
-      Buffer& buffer = buffers[buffer_outgoing];
       if (buffer_outgoing != buffer_incoming) {
         return true;
       }
-      if (buffer.counted() == PEAKS) {
+      if (buffers[buffer_outgoing].counted() == PEAKS) {
         const int32_t last = last_peak_micros[buffer_outgoing];
         if (duration_from_to(last, now) / SCALING >= PACKET_FINAL_TIMEOUT) {
           buffer_incoming = next_buffer(buffer_incoming);
-          buffers[buffer_incoming].initialize();
+          buffers[buffer_incoming].reset();
           last_peak_micros[buffer_incoming] = last;
           return true;
         }
@@ -42,7 +41,7 @@ class PeakBufferPool {
     void setup(uint32_t now) {
       buffer_incoming = 0;
       buffer_outgoing = 0;
-      buffers[buffer_incoming].initialize();
+      buffers[buffer_incoming].reset();
       last_peak_micros[buffer_incoming] = now;
     }
 
@@ -55,7 +54,7 @@ class PeakBufferPool {
           buffer_incoming = next_buffer(buffer_incoming);
           keeping_up = (buffer_incoming != buffer_outgoing);
         }
-        buffers[buffer_incoming].initialize();
+        buffers[buffer_incoming].reset();
       } else {
         buffers[buffer_incoming].append(preceding_spacing);
       }

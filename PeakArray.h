@@ -4,7 +4,7 @@ class PeakArray {
     T values[STORED];
 
   public:
-    void initialize() {
+    void reset() {
       count = 0;
     }
 

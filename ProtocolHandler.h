@@ -1,4 +1,5 @@
-#include "PeakBufferPool.h"
+#include "PeakArrayPool.h"
+#include "Optional.h"
 
 enum ProtocolNotice : uint8_t { NONE,
                                 MISSING_N_PEAKS = 1,
@@ -15,7 +16,7 @@ static const uint8_t PEAKS = 65; // internal peaks (or the gaps leading up to th
 static const uint8_t SCALING = 32; // granularity in µs of duration measurements between peaks
 static const uint8_t MAX_SPACING = 0xFF; // anything higher implies a delimiter, like 0x100 × 32 µs = 8192 µs
 
-static const uint32_t TRAIN_TIMEOUT = 360000; // in µs
+static const uint32_t TRAIN_TIMEOUT = 352000; // in µs
 
 class ProtocolHandler {
     static const uint8_t MIN_ADJACENT_PEAK_SPACING = 10; // in SCALING µs
@@ -25,50 +26,45 @@ class ProtocolHandler {
     static const uint8_t MIN_PREAMBLE              = 80; // in SCALING µs
     static const uint8_t MAX_PREAMBLE             = 100; // in SCALING µs
 
-    using Peaks = PeakBufferPool<BUFFERS, PEAKS, SCALING, PACKET_FINAL_TIMEOUT, MAX_SPACING>;
+    using Peaks = PeakArrayPool<BUFFERS, PEAKS, SCALING, PACKET_FINAL_TIMEOUT, MAX_SPACING>;
     Peaks peaks;
 
-    class StateHandler {
-        bool has_last_bits_handled;
-        uint32_t last_bits_handled; // only valid if has_last_bits_handled
-        bool has_last_time;
-        uint32_t last_time; // only usable if has_last_time
+    class PacketTrainState {
+        Optional<uint32_t> last_bits_handled;
+        Optional<uint32_t> last_event_time;
 
       public:
         void setup(uint32_t now) {
-          has_last_bits_handled = false;
-          has_last_time = true;
-          last_time = now;
+          last_bits_handled.reset();
+          last_event_time = now;
         }
 
-        // Whether we should make a fuss about errors:
-        // - not right after booting because we may very well tune in in the middle of broadcast,
-        // - not right after receiving a packet because our reaction deteriorates the reception quality
-        //   of the rest of the packet train.
-        bool is_good_weather(uint32_t time_received) const {
-          return !has_last_time || duration_from_to(last_time, time_received) >= TRAIN_TIMEOUT;
+        // Whether we are:
+        // - right after booting, when we may very well tune in in the middle of broadcast,
+        // - right after receiving a first packet in a packet train, when our response
+        //   deteriorates the reception quality of the rest of the packet train.
+        bool is_settling_down(uint32_t time_received) const {
+          return last_event_time.has_value() &&
+                 duration_from_to(last_event_time.value(), time_received) < TRAIN_TIMEOUT;
         }
 
         bool handle(uint32_t bits_received, uint32_t time_received) {
-          if (has_last_bits_handled && has_last_time
-              && last_bits_handled == bits_received
-              && duration_from_to(last_time, time_received) < TRAIN_TIMEOUT) {
+          if (last_bits_handled.has_value() && is_settling_down(time_received) &&
+              last_bits_handled.value() == bits_received) {
             return false; // looks like a repeat packet in the same train
           } else {
-            has_last_bits_handled = true;
             last_bits_handled = bits_received;
-            has_last_time = true;
-            last_time = time_received;
+            last_event_time = time_received;
             return true;
           }
         }
 
         void catch_up(uint32_t now) {
-          if (duration_from_to(last_time, now) >= (1ul << 30)) {
-            // Invalidate last_time because some future invocation of receive might happen when
-            // micros() has come around to last_time again. If has_last_time was already false,
-            // we compared last_time ourselves, but the outcome makes no difference then.
-            has_last_time = false;
+          if (duration_from_to(last_event_time.value(), now) >= (1ul << 30)) {
+            // Invalidate last_event_time because some future invocation of receive might happen when
+            // micros() has come around to last_event_time again. If last_event_time was already reset,
+            // we just compared it ourselves, but then the outcome makes no difference.
+            last_event_time.reset();
           }
         }
     } state;
@@ -174,8 +170,8 @@ class ProtocolHandler {
       const uint32_t now = micros();
       bool new_was_decodable;
       uint32_t new_time_received;
-      auto process = [&](Peaks::Buffer const& buffer, uint32_t time_received) {
-        const bool with_conviction = state.is_good_weather(time_received);
+      auto process = [&](Peaks::Buffer const & buffer, uint32_t time_received) {
+        const bool with_conviction = !state.is_settling_down(time_received);
         if (logTiming) {
           dump(buffer, time_received, now);
         }

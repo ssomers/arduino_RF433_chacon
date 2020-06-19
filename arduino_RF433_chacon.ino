@@ -4,8 +4,8 @@
 
 static const unsigned long LOOP_MILLIS = 50;
 static const uint8_t LOOPS_LEARNING = 80;
-static const uint8_t LOOPS_SPEED_UP = 33;
-static const uint8_t LOOPS_SLOW_DOWN = 3;
+static const uint8_t LOOPS_SPEED_UP = 36;
+static const uint8_t LOOPS_SLOW_DOWN = 4;
 static const uint8_t LOOPS_PER_HEARTBEAT = 25;
 
 #ifdef ARDUINO_AVR_NANO
@@ -16,6 +16,7 @@ static const int INT_ASK = digitalPinToInterrupt(PIN_IN_ASK);
 #else // ATTiny85
 static const bool LOG_EVENTS = false;
 static const bool LOG_TIMING = false;
+// Stay away from pins 3 and 4 for relay output, because they're flipped during boot.
 enum { PIN_OUT_SLOW, PIN_OUT_FAST, PIN_IN_ASK, PIN_OUT_BUZZER, PIN_OUT_LED };
 static const int INT_ASK = 0;
 #endif
