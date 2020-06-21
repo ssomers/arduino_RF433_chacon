@@ -1,5 +1,5 @@
 #include "pitches.h"
-#include "ProtocolHandler.h"
+#include "BitsReceiver.h"
 #include "TransmitterButtonStorage.h"
 
 static const unsigned long LOOP_MILLIS = 50;

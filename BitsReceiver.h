@@ -1,4 +1,4 @@
-#include "PeakArrayPool.h"
+#include "GapTracker.h"
 #include "Optional.h"
 
 enum ProtocolNotice : uint8_t { NONE,

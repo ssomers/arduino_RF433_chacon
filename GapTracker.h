@@ -1,4 +1,4 @@
-#include "PeakArray.h"
+#include "TruncatingVector.h"
 
 inline uint32_t duration_from_to(uint32_t early, uint32_t later) {
   return later - early;
