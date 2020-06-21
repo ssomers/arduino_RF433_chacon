@@ -10,7 +10,7 @@ static const uint8_t LOOPS_PER_HEARTBEAT = 25;
 
 #ifdef ARDUINO_AVR_NANO
 static const bool LOG_EVENTS = true;
-static const bool LOG_TIMING = false;
+static const bool LOG_TIMING = true;
 enum { PIN_IN_ASK = 2, PIN_OUT_BUZZER = 10, PIN_OUT_SLOW, PIN_OUT_FAST, PIN_OUT_LED = LED_BUILTIN };
 static const int INT_ASK = digitalPinToInterrupt(PIN_IN_ASK);
 #else // ATTiny85
@@ -125,7 +125,7 @@ static uint32_t primary_notice_time;
 // The first packet in a train is practically always broken. Don't publish any error
 // until we're sure it's not superseded by a properly received packet in the same train:
 static bool is_time_to_publish() {
-  return duration_from_to(primary_notice_time, micros()) >= TRAIN_TIMEOUT;
+  return duration_from_to(primary_notice_time, micros()) >= BitsReceiver::TRAIN_TIMEOUT;
 }
 
 template <bool enable> struct SerialOrNot_t;
@@ -182,7 +182,7 @@ struct EventLogger {
   }
 };
 
-static ProtocolHandler handler;
+static BitsReceiver receiver;
 static TransmitterButtonStorage transmitterButtonStorage;
 
 static void dump_transmitter_and_button(const char* prefix, Packet packet) {
@@ -213,9 +213,9 @@ void setup() {
   pinMode(PIN_OUT_BUZZER, OUTPUT);
   pinMode(PIN_OUT_SLOW, OUTPUT);
   pinMode(PIN_OUT_FAST, OUTPUT);
-  handler.setup();
+  receiver.setup();
   attachInterrupt(INT_ASK, []() {
-    if (!handler.handle_rise()) {
+    if (!receiver.handle_rise()) {
       primary_notice = MISSED_PACKET;
       SerialOrNot.println("Buffer not timely processed by main loop");
     }
@@ -263,7 +263,6 @@ static bool end_learning() {
   if (transmitterButtonStorage.count() == 0) {
     return false;
   } else {
-    SerialOrNot.println("Ended learning");
     for (uint8_t i = transmitterButtonStorage.count(); i > 0; --i) {
       digitalWrite(PIN_OUT_LED, HIGH);
       tone(PIN_OUT_BUZZER, NOTE_A5);
@@ -280,7 +279,7 @@ static void heartbeat() {
   static uint8_t iterations = 0;
   switch (++iterations) {
     case LOOPS_PER_HEARTBEAT - 5:
-      if (handler.has_been_alive()) {
+      if (receiver.has_been_alive()) {
         digitalWrite(PIN_OUT_LED, HIGH);
       }
       break;
@@ -361,7 +360,7 @@ void loop() {
   }
 
   uint32_t bits;
-  while (handler.receive<EventLogger, LOG_TIMING>(bits)) {
+  while (receiver.receive<EventLogger, LOG_TIMING>(bits)) {
     const Packet packet { bits };
     const bool recognized = transmitterButtonStorage.recognizes(packet);
     dump_transmitter_and_button("Received", packet);

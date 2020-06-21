@@ -1,6 +1,7 @@
-template <uint8_t STORED, typename T>
-class PeakArray {
-    uint8_t count;
+// Vector remembering only the first STORED values
+template <typename size_type, size_type STORED, typename T>
+class TruncatingVector {
+    size_type count;
     T values[STORED];
 
   public:
@@ -8,19 +9,19 @@ class PeakArray {
       count = 0;
     }
 
-    void append(uint8_t value) {
+    void push_back(T value) {
       if (count < STORED) {
         values[count] = value;
       }
       ++count;
-      // never mind that we might get 256 or more consecutive appends
+      // may overflow size_type, that's up to the caller
     }
 
-    uint8_t counted() const {
+    size_type size() const {
       return count;
     }
 
-    T value(uint8_t p) const {
+    T operator[](size_type p) const {
       return values[p];
     }
 };
