@@ -1,10 +1,11 @@
 #include "TruncatingVector.h"
 
+// Positive even if microseconds have rolled around.
 inline uint32_t duration_from_to(uint32_t early, uint32_t later) {
   return later - early;
 }
 
-template <uint8_t BUFFERS, uint8_t MIN_GAPS, uint8_t REQUIRED_GAPS, uint8_t SCALING, uint8_t PACKET_FINAL_TIMEOUT, uint8_t MAX_WIDTH>
+template <uint8_t BUFFERS, uint8_t MIN_GAPS, uint8_t REQUIRED_GAPS, uint8_t TIME_SCALING, uint32_t PACKET_GAP_TIMEOUT, uint32_t PACKET_FINAL_TIMEOUT>
 class GapTracker {
   public:
     using Width = uint8_t;
@@ -27,7 +28,7 @@ class GapTracker {
       }
       if (buffers[buffer_outgoing].size() == REQUIRED_GAPS) {
         const int32_t last = last_rise_micros[buffer_outgoing];
-        if (duration_from_to(last, now) >= PACKET_FINAL_TIMEOUT * SCALING ) {
+        if (duration_from_to(last, now) >= PACKET_FINAL_TIMEOUT) {
           buffer_incoming = next_buffer(buffer_incoming);
           buffers[buffer_incoming].reset();
           last_rise_micros[buffer_incoming] = last;
@@ -48,15 +49,17 @@ class GapTracker {
     bool handle_rise() {
       bool keeping_up = true;
       const uint32_t now = micros();
-      const uint32_t preceding_gap_width = duration_from_to(last_rise_micros[buffer_incoming], now) / SCALING;
-      if (preceding_gap_width > MAX_WIDTH) {
+      const uint32_t preceding_gap_duration = duration_from_to(last_rise_micros[buffer_incoming], now);
+      if (preceding_gap_duration >= PACKET_GAP_TIMEOUT) {
         if (buffers[buffer_incoming].size() >= MIN_GAPS) {
           buffer_incoming = next_buffer(buffer_incoming);
           keeping_up = (buffer_incoming != buffer_outgoing);
         }
         buffers[buffer_incoming].reset();
       } else {
-        buffers[buffer_incoming].push_back(preceding_gap_width);
+        static_assert(((PACKET_GAP_TIMEOUT - 1) >> TIME_SCALING) < 0x100);
+        const uint8_t scaled_gap_width = preceding_gap_duration >> TIME_SCALING;
+        buffers[buffer_incoming].push_back(scaled_gap_width);
       }
       last_rise_micros[buffer_incoming] = now;
       return keeping_up;

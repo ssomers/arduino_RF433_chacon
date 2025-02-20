@@ -1,8 +1,9 @@
 #include "pitches.h"
 #include "BitsReceiver.h"
+#include "SerialOrNot.h"
 #include "TransmitterButtonStorage.h"
 
-static const unsigned long LOOP_MILLIS = 50;
+static const unsigned long LOOP_DELAY_MILLIS = 50; // save energy, but allow processing buffers
 static const uint8_t LOOPS_LEARNING = 80;
 static const uint8_t LOOPS_SPEED_UP = 36;
 static const uint8_t LOOPS_SLOW_DOWN = 4;
@@ -17,7 +18,7 @@ static const int INT_ASK = digitalPinToInterrupt(PIN_IN_ASK);
 static const bool LOG_EVENTS = false;
 static const bool LOG_TIMING = false;
 // Stay away from pins 3 and 4 for relay output, because they're flipped during boot.
-enum { PIN_OUT_SLOW, PIN_OUT_FAST, PIN_IN_ASK, PIN_OUT_BUZZER, PIN_OUT_LED };
+enum { PIN_OUT_SLOW = 0, PIN_OUT_FAST = 1, PIN_IN_ASK = 2, PIN_OUT_BUZZER = 3, PIN_OUT_LED = 4 };
 static const int INT_ASK = 0;
 #endif
 
@@ -60,7 +61,7 @@ class SpeedRegulator {
       } else if (!is_slow() && !is_fast()) {
         transition_iterations = LOOPS_SPEED_UP;
       }
-      write_speed(FAST);
+      write_speed(FAST); // ramp up with high power, we'll tone it down for slow speed after the transition
     }
 
     void slow_down() {
@@ -69,7 +70,7 @@ class SpeedRegulator {
       } else if (is_fast()) {
         transition_iterations = LOOPS_SLOW_DOWN;
       }
-      write_speed(OFF);
+      write_speed(OFF); // ramp down without power, we'll power on slow speed after the transition
     }
 };
 
@@ -127,36 +128,6 @@ static uint32_t primary_notice_time;
 static bool is_time_to_publish() {
   return duration_from_to(primary_notice_time, micros()) >= BitsReceiver::TRAIN_TIMEOUT;
 }
-
-template <bool enable> struct SerialOrNot_t;
-template <> struct SerialOrNot_t<false> {
-  void begin(long) {}
-  template <typename T> void print(T) {}
-  template <typename T, typename F> void print(T, F) {}
-  void println() {}
-  template <typename T> void println(T) {}
-  template <typename T> void write(T) {}
-};
-template <> struct SerialOrNot_t<true> {
-  void begin(long rate) {
-    Serial.begin(rate);
-  }
-  template <typename T> void print(T t) {
-    Serial.print(t);
-  }
-  template <typename T, typename F> void print(T t, F f) {
-    Serial.print(t, f);
-  }
-  void println() {
-    Serial.println();
-  }
-  template <typename T> void println(T t) {
-    Serial.println(t);
-  }
-  template <typename T> void write(T t) {
-    Serial.write(t);
-  }
-};
 
 static SerialOrNot_t<LOG_EVENTS> SerialOrNot;
 
@@ -341,7 +312,7 @@ void loop() {
   static uint8_t iterations_learning = LOOPS_LEARNING;
   static SpeedRegulator speed_regulator;
 
-  delay(LOOP_MILLIS); // save energy & provide good enough intervals
+  delay(LOOP_DELAY_MILLIS);
 
   if (iterations_learning > 0) {
     if (--iterations_learning == 0) {
