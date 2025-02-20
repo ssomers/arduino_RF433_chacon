@@ -1,5 +1,6 @@
 #include "pitches.h"
 #include "BitsReceiver.h"
+#include "SerialOrNot.h"
 #include "TransmitterButtonStorage.h"
 
 static const unsigned long LOOP_MILLIS = 50;
@@ -145,36 +146,6 @@ static uint32_t primary_notice_time;
 static bool is_time_to_publish() {
   return duration_from_to(primary_notice_time, micros()) >= BitsReceiver::TRAIN_TIMEOUT;
 }
-
-template<bool enable> struct SerialOrNot_t;
-template<> struct SerialOrNot_t<false> {
-  void begin(long) {}
-  template<typename T> void print(T) {}
-  template<typename T, typename F> void print(T, F) {}
-  void println() {}
-  template<typename T> void println(T) {}
-  template<typename T> void write(T) {}
-};
-template<> struct SerialOrNot_t<true> {
-  void begin(long rate) {
-    Serial.begin(rate);
-  }
-  template<typename T> void print(T t) {
-    Serial.print(t);
-  }
-  template<typename T, typename F> void print(T t, F f) {
-    Serial.print(t, f);
-  }
-  void println() {
-    Serial.println();
-  }
-  template<typename T> void println(T t) {
-    Serial.println(t);
-  }
-  template<typename T> void write(T t) {
-    Serial.write(t);
-  }
-};
 
 static SerialOrNot_t<LOG_EVENTS> SerialOrNot;
 
