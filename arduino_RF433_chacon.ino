@@ -3,7 +3,7 @@
 #include "SerialOrNot.h"
 #include "TransmitterButtonStorage.h"
 
-static const unsigned long LOOP_MILLIS = 50;
+static const unsigned long LOOP_DELAY_MILLIS = 50;  // save energy, but allow processing buffers
 static const uint8_t LOOPS_LEARNING = 80;
 static const uint8_t LOOPS_SPEED_UP = 36;
 static const uint8_t LOOPS_SLOW_DOWN = 4;
@@ -22,11 +22,11 @@ static const int INT_ASK = digitalPinToInterrupt(PIN_IN_ASK);
 static const bool LOG_EVENTS = false;
 static const bool LOG_TIMING = false;
 // Stay away from pins 3 and 4 for relay output, because they're flipped during boot.
-enum { PIN_OUT_SLOW,
-       PIN_OUT_FAST,
-       PIN_IN_ASK,
-       PIN_OUT_BUZZER,
-       PIN_OUT_LED };
+enum { PIN_OUT_SLOW = 0,
+       PIN_OUT_FAST = 1,
+       PIN_IN_ASK = 2,
+       PIN_OUT_BUZZER = 3,
+       PIN_OUT_LED = 4 };
 static const int INT_ASK = 0;
 #endif
 
@@ -71,7 +71,7 @@ public:
     } else if (!is_slow() && !is_fast()) {
       transition_iterations = LOOPS_SPEED_UP;
     }
-    write_speed(FAST);
+    write_speed(FAST);  // ramp up with high power, we'll tone it down for slow speed after the transition
   }
 
   void slow_down() {
@@ -80,12 +80,12 @@ public:
     } else if (is_fast()) {
       transition_iterations = LOOPS_SLOW_DOWN;
     }
-    write_speed(OFF);
+    write_speed(OFF);  // ramp down without power, we'll power on slow speed after the transition
   }
 };
 
-enum LocalNotice : uint8_t {
-  PRIORITY_NOTICES = 128,
+static const uint8_t PRIORITY_NOTICES = 128;
+enum class LocalNotice : uint8_t {
   MISSED_PACKET = PRIORITY_NOTICES,
   REGISTER_ACTUAL,
   REGISTER_AGAIN,
@@ -99,41 +99,41 @@ enum LocalNotice : uint8_t {
 
 static uint16_t note1(uint8_t beeps_buzzing) {
   switch (beeps_buzzing) {
-    case REGISTER_ACTUAL:
-    case REGISTER_AGAIN:
-    case DEREGISTER_ACTUAL:
-    case DEREGISTER_AGAIN:
-    case DEREGISTER_ALL:
-    case GOING_NOWHERE:
-    case GOING_UP:
-    case GOING_DOWN: return NOTE_E5;
-    case MISSED_PACKET:
+    case uint8_t(LocalNotice::REGISTER_ACTUAL):
+    case uint8_t(LocalNotice::REGISTER_AGAIN):
+    case uint8_t(LocalNotice::DEREGISTER_ACTUAL):
+    case uint8_t(LocalNotice::DEREGISTER_AGAIN):
+    case uint8_t(LocalNotice::DEREGISTER_ALL):
+    case uint8_t(LocalNotice::GOING_NOWHERE):
+    case uint8_t(LocalNotice::GOING_UP):
+    case uint8_t(LocalNotice::GOING_DOWN): return NOTE_E5;
+    case uint8_t(LocalNotice::MISSED_PACKET):
     default: return NOTE_A2;
   }
 }
 
 static uint16_t note2(uint8_t beeps_buzzing) {
   switch (beeps_buzzing) {
-    case REGISTER_ACTUAL:
-    case REGISTER_AGAIN: return NOTE_E6;
-    case DEREGISTER_ACTUAL:
-    case DEREGISTER_AGAIN: return NOTE_A4;
-    case DEREGISTER_ALL: return NOTE_A3;
-    case GOING_NOWHERE: return NOTE_E5;
-    case GOING_UP: return NOTE_A5;
-    case GOING_DOWN: return NOTE_A4;
-    case MISSED_PACKET: return NOTE_A2;
+    case uint8_t(LocalNotice::REGISTER_ACTUAL):
+    case uint8_t(LocalNotice::REGISTER_AGAIN): return NOTE_E6;
+    case uint8_t(LocalNotice::DEREGISTER_ACTUAL):
+    case uint8_t(LocalNotice::DEREGISTER_AGAIN): return NOTE_A4;
+    case uint8_t(LocalNotice::DEREGISTER_ALL): return NOTE_A3;
+    case uint8_t(LocalNotice::GOING_NOWHERE): return NOTE_E5;
+    case uint8_t(LocalNotice::GOING_UP): return NOTE_A5;
+    case uint8_t(LocalNotice::GOING_DOWN): return NOTE_A4;
+    case uint8_t(LocalNotice::MISSED_PACKET): return NOTE_A2;
     default: return NOTE_E3;
   }
 }
 
 static uint16_t note3(uint8_t beeps_buzzing) {
   switch (beeps_buzzing) {
-    case REGISTER_ACTUAL: return NOTE_A6;
-    case REGISTER_AGAIN: return NOTE_E6;
-    case DEREGISTER_ACTUAL: return NOTE_E4;
-    case DEREGISTER_AGAIN: return NOTE_A4;
-    case DEREGISTER_ALL: return NOTE_E3;
+    case uint8_t(LocalNotice::REGISTER_ACTUAL): return NOTE_A6;
+    case uint8_t(LocalNotice::REGISTER_AGAIN): return NOTE_E6;
+    case uint8_t(LocalNotice::DEREGISTER_ACTUAL): return NOTE_E4;
+    case uint8_t(LocalNotice::DEREGISTER_AGAIN): return NOTE_A4;
+    case uint8_t(LocalNotice::DEREGISTER_ALL): return NOTE_E3;
     default: return 0;
   }
 }
@@ -150,23 +150,17 @@ static bool is_time_to_publish() {
 static SerialOrNot_t<LOG_EVENTS> SerialOrNot;
 
 struct EventLogger {
-  template<typename T> static void print(uint8_t notice, T t) {
-    if (notice > 0) {
-      SerialOrNot.print(t);
-    }
+  template<typename T> static void print(T t) {
+    SerialOrNot.print(t);
   }
-  template<typename T, typename F> static void print(uint8_t notice, T t, F f) {
-    if (notice > 0) {
-      SerialOrNot.print(t, f);
-    }
+  template<typename T, typename F> static void print(T t, F f) {
+    SerialOrNot.print(t, f);
   }
-  template<typename T> static void println(uint8_t notice, T t) {
-    if (notice > 0) {
-      SerialOrNot.println(t);
-      if (notice > primary_notice) {
-        primary_notice = notice;
-        primary_notice_time = micros();
-      }
+  template<typename N, typename T> static void println(N notice, T t) {
+    SerialOrNot.println(t);
+    if (primary_notice < uint8_t(notice)) {
+      primary_notice = uint8_t(notice);
+      primary_notice_time = micros();
     }
   }
 };
@@ -174,22 +168,30 @@ struct EventLogger {
 static BitsReceiver receiver;
 static TransmitterButtonStorage transmitterButtonStorage;
 
-static void dump_transmitter_and_button(const char* prefix, ChaconPacket packet) {
+static void print_button_pair(ChaconButtonPairId button_pair) {
+  SerialOrNot.print(" button pair ");
+  SerialOrNot.write('A' + button_pair.page());
+  SerialOrNot.write('1' + button_pair.row());
+}
+
+static void dump_packet(const char* prefix, ChaconPacket packet) {
   SerialOrNot.print(prefix);
   SerialOrNot.print(" transmitter ");
   SerialOrNot.print(packet.transmitter(), HEX);
   if (packet.multicast()) {
     SerialOrNot.print(" all ");
   } else {
-    SerialOrNot.print(" button ");
-    SerialOrNot.write('A' + packet.page());
-    SerialOrNot.write('1' + packet.row());
+    print_button_pair(packet.button_pair());
   }
 }
 
-static void dump_transmitters_and_buttons(const char* prefix) {
+static void dump_button_pairs(const char* prefix) {
   for (int i = 0; i < transmitterButtonStorage.count(); ++i) {
-    dump_transmitter_and_button(prefix, ChaconPacket(transmitterButtonStorage.get(i)));
+    auto button_pair = transmitterButtonStorage.get(i);
+    SerialOrNot.print(prefix);
+    SerialOrNot.print(" transmitter ");
+    SerialOrNot.print(button_pair.transmitter(), HEX);
+    print_button_pair(button_pair);
     SerialOrNot.println();
   }
 }
@@ -206,14 +208,14 @@ void setup() {
   attachInterrupt(
     INT_ASK, []() {
       if (!receiver.handle_rise()) {
-        primary_notice = MISSED_PACKET;
+        primary_notice = uint8_t(LocalNotice::MISSED_PACKET);
         SerialOrNot.println("Buffer not timely processed by main loop");
       }
     },
     RISING);
 
   transmitterButtonStorage.load();
-  dump_transmitters_and_buttons("Initial");
+  dump_button_pairs("Initial");
   SerialOrNot.println("Start learning");
 
   tone(PIN_OUT_BUZZER, NOTE_A6, 75);
@@ -225,23 +227,23 @@ static bool learn(ChaconPacket packet) {
     if (!packet.on_or_off()) {
       SerialOrNot.println("Received wipe");
       transmitterButtonStorage.forget_all();
-      primary_notice = DEREGISTER_ALL;
+      primary_notice = uint8_t(LocalNotice::DEREGISTER_ALL);
       return true;
     }
   } else {
-    dump_transmitter_and_button("Received", packet);
+    dump_packet("Received", packet);
     SerialOrNot.println(packet.on_or_off() ? "①" : "⓪");
     if (packet.on_or_off()) {
-      if (transmitterButtonStorage.remember(packet.transmitter_and_button())) {
-        primary_notice = REGISTER_ACTUAL;
+      if (transmitterButtonStorage.remember(packet.button_pair())) {
+        primary_notice = uint8_t(LocalNotice::REGISTER_ACTUAL);
       } else {
-        primary_notice = REGISTER_AGAIN;
+        primary_notice = uint8_t(LocalNotice::REGISTER_AGAIN);
       }
     } else {
-      if (transmitterButtonStorage.forget(packet.transmitter_and_button())) {
-        primary_notice = DEREGISTER_ACTUAL;
+      if (transmitterButtonStorage.forget(packet.button_pair())) {
+        primary_notice = uint8_t(LocalNotice::DEREGISTER_ACTUAL);
       } else {
-        primary_notice = DEREGISTER_AGAIN;
+        primary_notice = uint8_t(LocalNotice::DEREGISTER_AGAIN);
       }
     }
     return true;
@@ -292,7 +294,7 @@ static void buzz_primary_notice() {
 
   if (primary_notice > 0) {
     if (primary_notice >= PRIORITY_NOTICES || (!beeps_buzzing && is_time_to_publish())) {
-      beeps_buzzing = primary_notice;
+      beeps_buzzing = uint8_t(primary_notice);
       primary_notice = 0;
       iterations = 0;
     }
@@ -332,7 +334,7 @@ void loop() {
   static uint8_t iterations_learning = LOOPS_LEARNING;
   static SpeedRegulator speed_regulator;
 
-  delay(LOOP_MILLIS);  // save energy & provide good enough intervals
+  delay(LOOP_DELAY_MILLIS);
 
   if (iterations_learning > 0) {
     if (--iterations_learning == 0) {
@@ -354,19 +356,19 @@ void loop() {
   while (receiver.receive<EventLogger, LOG_TIMING>(bits)) {
     const ChaconPacket packet{ bits };
     const bool recognized = transmitterButtonStorage.recognizes(packet);
-    dump_transmitter_and_button("Received", packet);
+    dump_packet("Received", packet);
     SerialOrNot.println(packet.on_or_off() ? "①" : "⓪");
     if (iterations_learning > 0) {
       if (learn(packet)) {
         iterations_learning = LOOPS_LEARNING;
       }
     } else if (!recognized) {
-      primary_notice = GOING_NOWHERE;  // also supersede errors from initial packet(s) in the packet train
+      primary_notice = uint8_t(LocalNotice::GOING_NOWHERE);  // also supersede errors from initial packet(s) in the packet train
     } else if (packet.on_or_off()) {
-      primary_notice = GOING_UP;
+      primary_notice = uint8_t(LocalNotice::GOING_UP);
       speed_regulator.speed_up();
     } else {
-      primary_notice = GOING_DOWN;
+      primary_notice = uint8_t(LocalNotice::GOING_DOWN);
       speed_regulator.slow_down();
     }
   }

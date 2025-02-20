@@ -2,93 +2,101 @@
 #include "ChaconPacket.h"
 
 class TransmitterButtonStorage {
-  static const uint8_t TRANSMITTER_BUTTONS_STORED = 4;
-  static const uint32_t NONE = ~0ul;
-
-  uint32_t transmitter_buttons[TRANSMITTER_BUTTONS_STORED];
-  uint8_t transmitter_button_count = 0;
+  static const uint8_t BUTTON_PAIRS_STORED = 4;
+  ChaconButtonPairId button_pairs[BUTTON_PAIRS_STORED];
+  uint8_t button_pair_count = 0;
+  static uint32_t* const eeprom_address;
 
 public:
   void load() {
-    uint32_t* const address = 0;
-    for (transmitter_button_count = 0;
-         transmitter_button_count < TRANSMITTER_BUTTONS_STORED;
-         transmitter_button_count++) {
-      uint32_t tb = transmitter_buttons[transmitter_button_count] = eeprom_read_dword(&address[transmitter_button_count]);
-      if (tb == NONE) {
+    for (button_pair_count = 0; button_pair_count < BUTTON_PAIRS_STORED; ++button_pair_count) {
+      uint32_t bits = eeprom_read_dword(&eeprom_address[button_pair_count]);
+      auto valid = button_pairs[button_pair_count].load_bits(bits).valid();
+      if (!valid) {
         break;
       }
     }
-    for (uint8_t i = transmitter_button_count; i < TRANSMITTER_BUTTONS_STORED; ++i) {
-      transmitter_buttons[i] = NONE;
+    for (uint8_t i = button_pair_count; i < BUTTON_PAIRS_STORED; ++i) {
+      button_pairs[i].invalidate();
     }
   }
 
   uint8_t count() const {
-    return transmitter_button_count;
+    return button_pair_count;
   }
 
-  uint32_t get(uint8_t index) const {
-    return transmitter_buttons[index];
+  ChaconButtonPairId get(uint8_t index) const {
+    return button_pairs[index];
   }
 
-  bool recognizes(ChaconPacket packet) const {
-    for (uint8_t i = 0; i < transmitter_button_count; ++i) {
-      if (packet.matches(transmitter_buttons[i])) {
+  bool contains(ChaconButtonPairId some_button_pair) const {
+    for (uint8_t i = 0; i < button_pair_count; ++i) {
+      if (some_button_pair == button_pairs[i]) {
         return true;
       }
     }
     return false;
   }
 
-  bool remember(uint32_t some_transmitter_button) {
-    if (!recognizes(ChaconPacket(some_transmitter_button))) {
-      if (transmitter_button_count == TRANSMITTER_BUTTONS_STORED) {
-        for (uint8_t i = 1; i < TRANSMITTER_BUTTONS_STORED; ++i) {
-          transmitter_buttons[i - 1] = transmitter_buttons[i];
-        }
-        transmitter_button_count -= 1;
+  bool recognizes(ChaconPacket packet) const {
+    for (uint8_t i = 0; i < button_pair_count; ++i) {
+      if (packet.matches(button_pairs[i])) {
+        return true;
       }
-      transmitter_buttons[transmitter_button_count] = some_transmitter_button;
-      transmitter_button_count += 1;
+    }
+    return false;
+  }
+
+  bool remember(ChaconButtonPairId some_button_pair) {
+    if (!contains(some_button_pair)) {
+      if (button_pair_count == BUTTON_PAIRS_STORED) {
+        for (uint8_t i = 1; i < BUTTON_PAIRS_STORED; ++i) {
+          button_pairs[i - 1] = button_pairs[i];
+        }
+        button_pair_count -= 1;
+      }
+      button_pairs[button_pair_count] = some_button_pair;
+      button_pair_count += 1;
       return true;
     } else {
       return false;
     }
   }
 
-  bool forget(uint32_t some_transmitter_button) {
+  bool forget(ChaconButtonPairId some_button_pair) {
     bool found = false;
     uint8_t old_index = 0;
     uint8_t new_index = 0;
-    while (old_index < transmitter_button_count) {
-      if (transmitter_buttons[old_index] == some_transmitter_button) {
+    while (old_index < button_pair_count) {
+      if (button_pairs[old_index] == some_button_pair) {
         found = true;
       } else {
-        transmitter_buttons[new_index] = transmitter_buttons[old_index];
+        button_pairs[new_index] = button_pairs[old_index];
         ++new_index;
       }
       ++old_index;
     }
-    transmitter_button_count = new_index;
-    while (new_index < TRANSMITTER_BUTTONS_STORED) {
-      transmitter_buttons[new_index] = NONE;
+    button_pair_count = new_index;
+    while (new_index < BUTTON_PAIRS_STORED) {
+      button_pairs[new_index].invalidate();
       ++new_index;
     }
     return found;
   }
 
   void forget_all() {
-    while (transmitter_button_count > 0) {
-      transmitter_button_count -= 1;
-      transmitter_buttons[transmitter_button_count] = NONE;
+    while (button_pair_count > 0) {
+      button_pair_count -= 1;
+      button_pairs[button_pair_count].invalidate();
     }
   }
 
   void store() {
-    uint32_t* const address = 0;
-    for (uint8_t i = 0; i < TRANSMITTER_BUTTONS_STORED; ++i) {
-      eeprom_update_dword(&address[i], transmitter_buttons[i]);
+    for (uint8_t i = 0; i < BUTTON_PAIRS_STORED; ++i) {
+      uint32_t bits = button_pairs[i].extract_bits();
+      eeprom_update_dword(&eeprom_address[i], bits);
     }
   }
 };
+
+uint32_t* const TransmitterButtonStorage::eeprom_address = 0;

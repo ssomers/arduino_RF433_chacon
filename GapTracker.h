@@ -1,10 +1,12 @@
 #include "TruncatingVector.h"
+#include "Optional.h"
 
+// Positive even if microseconds have rolled around.
 inline uint32_t duration_from_to(uint32_t early, uint32_t later) {
   return later - early;
 }
 
-template<uint8_t BUFFERS, uint8_t MIN_GAPS, uint8_t REQUIRED_GAPS, uint8_t SCALING, uint8_t PACKET_FINAL_TIMEOUT, uint8_t MAX_WIDTH>
+template<uint8_t BUFFERS, uint8_t MIN_GAPS, uint8_t REQUIRED_GAPS, uint8_t TIME_SCALING, uint16_t PACKET_GAP_TIMEOUT, uint32_t PACKET_FINAL_TIMEOUT>
 class GapTracker {
 public:
   using Width = uint8_t;
@@ -12,25 +14,32 @@ public:
 
 private:
   Buffer buffers[BUFFERS];
-  uint8_t buffer_incoming;
-  uint8_t buffer_outgoing;
   uint32_t last_rise_micros[BUFFERS];
-  uint32_t last_probed_micros;
+  uint8_t buffer_incoming = 0;
+  uint8_t buffer_outgoing = 0;
+  struct Flags {
+    bool first_rise_seen : 1;
+    bool alive : 1;
+    Flags() : first_rise_seen(false), alive(false) {}
+  } flags;
 
   static uint8_t next_buffer(uint8_t b) {
-    return ++b < BUFFERS ? b : 0;
+    // less opcode than any single expression I could think of
+    ++b;
+    return b < BUFFERS ? b : 0;
   }
 
   bool finalize_buffer_offline(uint32_t now) {
+    // offline = interrupts are disabled
     if (buffer_outgoing != buffer_incoming) {
       return true;
     }
-    if (buffers[buffer_outgoing].size() == REQUIRED_GAPS) {
-      const int32_t last = last_rise_micros[buffer_outgoing];
-      if (duration_from_to(last, now) >= PACKET_FINAL_TIMEOUT * SCALING) {
+    if (buffers[buffer_incoming].size() == REQUIRED_GAPS) {
+      const int32_t last = last_rise_micros[buffer_incoming];
+      if (duration_from_to(last, now) >= PACKET_FINAL_TIMEOUT) {
+        // revert to initial state
         buffer_incoming = next_buffer(buffer_incoming);
-        buffers[buffer_incoming].reset();
-        last_rise_micros[buffer_incoming] = last;
+        flags.first_rise_seen = false;
         return true;
       }
     }
@@ -38,25 +47,31 @@ private:
   }
 
 public:
-  void setup(uint32_t now) {
-    buffer_incoming = 0;
-    buffer_outgoing = 0;
-    buffers[buffer_incoming].reset();
-    last_rise_micros[buffer_incoming] = now;
-  }
-
   bool handle_rise() {
-    bool keeping_up = true;
+    // assume we're in an interrupt handler ourselves
     const uint32_t now = micros();
-    const uint32_t preceding_gap_width = duration_from_to(last_rise_micros[buffer_incoming], now) / SCALING;
-    if (preceding_gap_width > MAX_WIDTH) {
-      if (buffers[buffer_incoming].size() >= MIN_GAPS) {
-        buffer_incoming = next_buffer(buffer_incoming);
-        keeping_up = (buffer_incoming != buffer_outgoing);
+    Optional<uint8_t> preceding_gap_width;  // in ųs shifted by TIME_SCALING
+    bool keeping_up = true;
+
+    if (flags.first_rise_seen) {
+      const uint32_t duration = duration_from_to(last_rise_micros[buffer_incoming], now);
+      if (duration < PACKET_GAP_TIMEOUT) {
+        static_assert(((PACKET_GAP_TIMEOUT - 1) >> TIME_SCALING) < 0x100);
+        preceding_gap_width = uint8_t(uint16_t(duration) >> TIME_SCALING);
+      } else {
+        if (buffers[buffer_incoming].size() >= MIN_GAPS) {
+          buffer_incoming = next_buffer(buffer_incoming);
+          keeping_up = (buffer_incoming != buffer_outgoing);
+        }
       }
-      buffers[buffer_incoming].reset();
+    }
+    flags.first_rise_seen = true;
+    flags.alive = true;
+
+    if (preceding_gap_width.has_value()) {
+      buffers[buffer_incoming].push_back(preceding_gap_width.value());
     } else {
-      buffers[buffer_incoming].push_back(preceding_gap_width);
+      buffers[buffer_incoming].reset();
     }
     last_rise_micros[buffer_incoming] = now;
     return keeping_up;
@@ -76,13 +91,9 @@ public:
 
   bool has_been_alive() {
     noInterrupts();
-    const uint32_t last = last_rise_micros[buffer_incoming];
+    const bool alive = flags.alive;
+    flags.alive = false;
     interrupts();
-    if (last_probed_micros != last) {
-      last_probed_micros = last;
-      return true;
-    } else {
-      return false;
-    }
+    return alive;
   }
 };

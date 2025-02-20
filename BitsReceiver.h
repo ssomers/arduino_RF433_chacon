@@ -1,8 +1,7 @@
 #include "GapTracker.h"
 #include "Optional.h"
 
-enum ProtocolNotice : uint8_t {
-  NONE,
+enum class ProtocolNotice : uint8_t {
   MISSING_N_GAPS = 1,
   MISSING_2_GAPS = 2,
   MISSING_1_GAP = 5,
@@ -16,23 +15,23 @@ enum ProtocolNotice : uint8_t {
 
 class BitsReceiver {
 public:
-  static const uint32_t TRAIN_TIMEOUT = 352000;  // in µs
+  static const uint32_t TRAIN_TIMEOUT = 0x50000;  // in µs, that makes 328 ms
 
 private:
   static const uint8_t BUFFERS = 4;
-  static const uint8_t REQUIRED_GAPS = 65;  // number of gaps between peaks forming a packet
-  static const uint8_t MIN_GAPS = 60;       // number of gaps we want the tracker to let through
-  static const uint8_t SCALING = 32;        // granularity in µs of gap duration measurements
-  static const uint8_t MAX_WIDTH = 0xFF;    // wider gap implies a delimiter, like 0x100 × 32 µs = 8192 µs
+  static const uint8_t REQUIRED_GAPS = 65;             // number of gaps between peaks forming a packet
+  static const uint8_t MIN_GAPS = 60;                  // number of gaps we want the tracker to consider viable
+  static const uint8_t TIME_SCALING = 5;               // how many bits to right-shift measured times in µs, for recording gap widths
+  static const uint32_t PACKET_GAP_TIMEOUT = 0x2000;   // in µs, wider gap implies a delimiter
+  static const uint32_t PACKET_FINAL_TIMEOUT = 0x800;  // in µs, more implies there's something following an otherwise legit packet
 
-  static const uint8_t MIN_NARROW_GAP_WIDTH = 12;  // in SCALING µs
-  static const uint8_t MAX_NARROW_GAP_WIDTH = 24;  // in SCALING µs
-  static const uint8_t MIN_WIDE_GAP_WIDTH = 40;    // in SCALING µs
-  static const uint8_t PACKET_FINAL_TIMEOUT = 60;  // in SCALING µs
-  static const uint8_t MIN_PREAMBLE = 60;          // in SCALING µs
-  static const uint8_t MAX_PREAMBLE = 120;         // in SCALING µs
+  static const uint8_t MIN_NARROW_GAP_WIDTH = 12;  // in scaled gap width
+  static const uint8_t MAX_NARROW_GAP_WIDTH = 24;  // in scaled gap width
+  static const uint8_t MIN_WIDE_GAP_WIDTH = 40;    // in scaled gap width
+  static const uint8_t MIN_PREAMBLE = 60;          // in scaled gap width
+  static const uint8_t MAX_PREAMBLE = 120;         // in scaled gap width
 
-  using MyGapTracker = GapTracker<BUFFERS, MIN_GAPS, REQUIRED_GAPS, SCALING, PACKET_FINAL_TIMEOUT, MAX_WIDTH>;
+  using MyGapTracker = GapTracker<BUFFERS, MIN_GAPS, REQUIRED_GAPS, TIME_SCALING, PACKET_GAP_TIMEOUT, PACKET_FINAL_TIMEOUT>;
   using GapBuffer = MyGapTracker::Buffer;
   MyGapTracker gap_tracker;
 
@@ -67,10 +66,9 @@ private:
     }
 
     void catch_up(uint32_t now) {
-      if (duration_from_to(last_event_time.value(), now) >= (1ul << 30)) {
-        // Invalidate last_event_time because some future invocation of receive might happen when
-        // micros() has come around to last_event_time again. If last_event_time was already reset,
-        // we just compared its value ourselves, but then the outcome makes no difference.
+      // Every ~72 minutes, the time in ųs rolls over.
+      // Forget any last_event_time recorded in a previous era.
+      if (last_event_time.has_value() && duration_from_to(last_event_time.value(), now) & (uint32_t(2) << 31)) {
         last_event_time.reset();
       }
     }
@@ -100,22 +98,26 @@ private:
   }
 
   template<typename EventLogger>
-  static bool decode(GapBuffer const& buffer, bool with_conviction, uint32_t& bits_received) {
+  static bool decode(GapBuffer const& buffer, bool seems_legit, uint32_t& bits_received) {
     const uint8_t gap_count = buffer.size();
     if (gap_count != REQUIRED_GAPS) {
-      const auto notice = gap_count > REQUIRED_GAPS        ? EXCESS_GAPS
-                          : gap_count == REQUIRED_GAPS - 1 ? MISSING_1_GAP
-                          : gap_count == REQUIRED_GAPS - 2 ? MISSING_2_GAPS
-                                                           : MISSING_N_GAPS;
-      EventLogger::print(with_conviction * notice, gap_count);
-      EventLogger::println(with_conviction * notice, " gaps in a packet");
+      if (seems_legit) {
+        const auto notice = gap_count > REQUIRED_GAPS        ? ProtocolNotice::EXCESS_GAPS
+                            : gap_count == REQUIRED_GAPS - 1 ? ProtocolNotice::MISSING_1_GAP
+                            : gap_count == REQUIRED_GAPS - 2 ? ProtocolNotice::MISSING_2_GAPS
+                                                             : ProtocolNotice::MISSING_N_GAPS;
+        EventLogger::print(gap_count);
+        EventLogger::println(notice, " gaps in a packet");
+      }
       return false;
     }
 
     const uint8_t preamble = buffer[0];
     if (preamble < MIN_PREAMBLE || preamble > MAX_PREAMBLE) {
-      EventLogger::print(with_conviction * INVALID_PREAMBLE, preamble);
-      EventLogger::println(with_conviction * INVALID_PREAMBLE, "µs preamble after delimiter");
+      if (seems_legit) {
+        EventLogger::print(preamble);
+        EventLogger::println(ProtocolNotice::INVALID_PREAMBLE, "µs preamble after delimiter");
+      }
       return false;
     }
 
@@ -139,21 +141,29 @@ private:
       }
     }
     if (spacing_errors) {
-      EventLogger::println(with_conviction * WRONG_PEAK_SPACING, "Peak spacing wildly out of whack");
+      if (seems_legit) {
+        EventLogger::println(ProtocolNotice::WRONG_PEAK_SPACING, "Peak spacing wildly out of whack");
+      }
       return false;
     }
     if (bit_errors) {
-      EventLogger::println(with_conviction * WRONG_ADJACENT_PEAK_COUNT, "Wrong number of adjacent peaks");
+      if (seems_legit) {
+        EventLogger::println(ProtocolNotice::WRONG_ADJACENT_PEAK_COUNT, "Wrong number of adjacent peaks");
+      }
       return false;
     }
     if (bitcount != 32) {
-      EventLogger::print(with_conviction * WRONG_BIT_COUNT, "#bits=");
-      EventLogger::println(with_conviction * WRONG_BIT_COUNT, bitcount);
+      if (seems_legit) {
+        EventLogger::print("#bits=");
+        EventLogger::println(ProtocolNotice::WRONG_BIT_COUNT, bitcount);
+      }
       return false;
     }
     if (adjacent_narrow_gaps != (bits_received & 1)) {
-      EventLogger::print(with_conviction * WRONG_PARITY, "Incorrect #parity gaps ");
-      EventLogger::println(with_conviction * WRONG_PARITY, adjacent_narrow_gaps);
+      if (seems_legit) {
+        EventLogger::print("Incorrect #parity gaps ");
+        EventLogger::println(ProtocolNotice::WRONG_PARITY, adjacent_narrow_gaps);
+      }
       return false;
     }
     return true;
@@ -162,7 +172,6 @@ private:
 public:
   void setup() {
     const uint32_t now = micros();
-    gap_tracker.setup(now);
     state.setup(now);
   }
 
@@ -180,10 +189,10 @@ public:
     bool new_was_decodable;
     uint32_t new_time_received;
     auto process = [&](GapBuffer const& buffer, uint32_t time_received) {
-      const bool with_conviction = !state.is_settling_down(time_received);
-      new_was_decodable = decode<EventLogger>(buffer, with_conviction, bits_received);
+      const bool seems_legit = !state.is_settling_down(time_received);
+      new_was_decodable = decode<EventLogger>(buffer, seems_legit, bits_received);
       new_time_received = time_received;
-      if (logTiming && with_conviction) {
+      if (logTiming && seems_legit) {
         dump(buffer, time_received, now);
       }
     };

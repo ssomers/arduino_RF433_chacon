@@ -1,3 +1,5 @@
+#pragma once
+
 // Non-initializing minimal std::optional
 template<typename T>
 class Optional {
