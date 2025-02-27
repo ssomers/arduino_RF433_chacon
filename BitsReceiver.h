@@ -1,15 +1,17 @@
 #include "GapTracker.h"
 #include "Optional.h"
 
-enum ProtocolNotice : uint8_t { NONE,
-                                MISSING_N_GAPS = 1,
-                                MISSING_2_GAPS = 2,
-                                MISSING_1_GAP =  5,
-                                EXCESS_GAPS = 6,
-                                INVALID_PREAMBLE = 7,
-                                WRONG_PEAK_SPACING = 8, WRONG_ADJACENT_PEAK_COUNT = 9,
-                                WRONG_BIT_COUNT = 10, WRONG_PARITY = 11
-                              };
+enum class ProtocolNotice : uint8_t {
+  MISSING_N_GAPS = 1,
+  MISSING_2_GAPS = 2,
+  MISSING_1_GAP =  5,
+  EXCESS_GAPS = 6,
+  INVALID_PREAMBLE = 7,
+  WRONG_PEAK_SPACING = 8,
+  WRONG_ADJACENT_PEAK_COUNT = 9,
+  WRONG_BIT_COUNT = 10,
+  WRONG_PARITY = 11,
+};
 
 class BitsReceiver {
   public:
@@ -99,19 +101,23 @@ class BitsReceiver {
     static bool decode(GapBuffer const& buffer, bool seems_legit, uint32_t& bits_received) {
       const uint8_t gap_count = buffer.size();
       if (gap_count != REQUIRED_GAPS) {
-        const auto notice = gap_count > REQUIRED_GAPS ? EXCESS_GAPS :
-                            gap_count == REQUIRED_GAPS - 1 ? MISSING_1_GAP :
-                            gap_count == REQUIRED_GAPS - 2 ? MISSING_2_GAPS :
-                            MISSING_N_GAPS;
-        EventLogger::print(seems_legit * notice, gap_count);
-        EventLogger::println(seems_legit * notice, " gaps in a packet");
+        if (seems_legit) {
+          const auto notice = gap_count > REQUIRED_GAPS ? ProtocolNotice::EXCESS_GAPS :
+                              gap_count == REQUIRED_GAPS - 1 ? ProtocolNotice::MISSING_1_GAP :
+                              gap_count == REQUIRED_GAPS - 2 ? ProtocolNotice::MISSING_2_GAPS :
+                              ProtocolNotice::MISSING_N_GAPS;
+          EventLogger::print(gap_count);
+          EventLogger::println(notice, " gaps in a packet");
+        }
         return false;
       }
 
       const uint8_t preamble = buffer[0];
       if (preamble < MIN_PREAMBLE || preamble > MAX_PREAMBLE) {
-        EventLogger::print(seems_legit * INVALID_PREAMBLE, preamble);
-        EventLogger::println(seems_legit * INVALID_PREAMBLE, "µs preamble after delimiter");
+        if (seems_legit) {
+          EventLogger::print(preamble);
+          EventLogger::println(ProtocolNotice::INVALID_PREAMBLE, "µs preamble after delimiter");
+        }
         return false;
       }
 
@@ -135,21 +141,29 @@ class BitsReceiver {
         }
       }
       if (spacing_errors) {
-        EventLogger::println(seems_legit * WRONG_PEAK_SPACING, "Peak spacing wildly out of whack");
+        if (seems_legit) {
+          EventLogger::println(ProtocolNotice::WRONG_PEAK_SPACING, "Peak spacing wildly out of whack");
+        }
         return false;
       }
       if (bit_errors) {
-        EventLogger::println(seems_legit * WRONG_ADJACENT_PEAK_COUNT, "Wrong number of adjacent peaks");
+        if (seems_legit) {
+          EventLogger::println(ProtocolNotice::WRONG_ADJACENT_PEAK_COUNT, "Wrong number of adjacent peaks");
+        }
         return false;
       }
       if (bitcount != 32) {
-        EventLogger::print(seems_legit * WRONG_BIT_COUNT, "#bits=");
-        EventLogger::println(seems_legit * WRONG_BIT_COUNT, bitcount);
+        if (seems_legit) {
+          EventLogger::print("#bits=");
+          EventLogger::println(ProtocolNotice::WRONG_BIT_COUNT, bitcount);
+        }
         return false;
       }
       if (adjacent_narrow_gaps != (bits_received & 1)) {
-        EventLogger::print(seems_legit * WRONG_PARITY, "Incorrect #parity gaps ");
-        EventLogger::println(seems_legit * WRONG_PARITY, adjacent_narrow_gaps);
+        if (seems_legit) {
+          EventLogger::print("Incorrect #parity gaps ");
+          EventLogger::println(ProtocolNotice::WRONG_PARITY, adjacent_narrow_gaps);
+        }
         return false;
       }
       return true;
