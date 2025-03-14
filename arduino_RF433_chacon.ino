@@ -11,72 +11,90 @@ static const uint8_t LOOPS_PER_HEARTBEAT = 25;
 #ifdef ARDUINO_AVR_NANO
 static const bool LOG_EVENTS = true;
 static const bool LOG_TIMING = true;
-enum { PIN_IN_ASK = 2, PIN_OUT_BUZZER = 10, PIN_OUT_SLOW, PIN_OUT_FAST, PIN_OUT_LED = LED_BUILTIN };
+enum { PIN_IN_ASK = 2,
+       PIN_OUT_BUZZER = 10,
+       PIN_OUT_SLOW,
+       PIN_OUT_FAST,
+       PIN_OUT_LED = LED_BUILTIN };
 static const int INT_ASK = digitalPinToInterrupt(PIN_IN_ASK);
-#else // ATTiny85
+#else  // ATTiny85
 static const bool LOG_EVENTS = false;
 static const bool LOG_TIMING = false;
 // Stay away from pins 3 and 4 for relay output, because they're flipped during boot.
-enum { PIN_OUT_SLOW, PIN_OUT_FAST, PIN_IN_ASK, PIN_OUT_BUZZER, PIN_OUT_LED };
+enum { PIN_OUT_SLOW,
+       PIN_OUT_FAST,
+       PIN_IN_ASK,
+       PIN_OUT_BUZZER,
+       PIN_OUT_LED };
 static const int INT_ASK = 0;
 #endif
 
 class SpeedRegulator {
-    uint8_t transition_iterations = 0;
+  uint8_t transition_iterations = 0;
 
-    enum Speed : uint8_t { OFF, SLOW, FAST };
-    static void write_speed(Speed speed) {
-      // Make sure that at no point both output pins are high
-      if (speed != SLOW) digitalWrite(PIN_OUT_SLOW, LOW);
-      if (speed != FAST) digitalWrite(PIN_OUT_FAST, LOW);
-      if (speed == SLOW) digitalWrite(PIN_OUT_SLOW, HIGH);
-      if (speed == FAST) digitalWrite(PIN_OUT_FAST, HIGH);
-    }
+  enum Speed : uint8_t { OFF,
+                         SLOW,
+                         FAST };
+  static void write_speed(Speed speed) {
+    // Make sure that at no point both output pins are high
+    if (speed != SLOW) digitalWrite(PIN_OUT_SLOW, LOW);
+    if (speed != FAST) digitalWrite(PIN_OUT_FAST, LOW);
+    if (speed == SLOW) digitalWrite(PIN_OUT_SLOW, HIGH);
+    if (speed == FAST) digitalWrite(PIN_OUT_FAST, HIGH);
+  }
 
-    static bool is_fast() {
-      return digitalRead(PIN_OUT_FAST);
-    }
+  static bool is_fast() {
+    return digitalRead(PIN_OUT_FAST);
+  }
 
-    static bool is_slow() {
-      return digitalRead(PIN_OUT_SLOW);
-    }
+  static bool is_slow() {
+    return digitalRead(PIN_OUT_SLOW);
+  }
 
-  public:
-    void step() {
-      if (transition_iterations > 0) {
-        if (--transition_iterations == 0) {
-          if (is_slow()) {
-            write_speed(FAST);
-          } else {
-            write_speed(SLOW);
-          }
+public:
+  void step() {
+    if (transition_iterations > 0) {
+      if (--transition_iterations == 0) {
+        if (is_slow()) {
+          write_speed(FAST);
+        } else {
+          write_speed(SLOW);
         }
       }
     }
+  }
 
-    void speed_up() {
-      if (transition_iterations > 0) {
-        transition_iterations = 0;
-      } else if (!is_slow() && !is_fast()) {
-        transition_iterations = LOOPS_SPEED_UP;
-      }
-      write_speed(FAST);
+  void speed_up() {
+    if (transition_iterations > 0) {
+      transition_iterations = 0;
+    } else if (!is_slow() && !is_fast()) {
+      transition_iterations = LOOPS_SPEED_UP;
     }
+    write_speed(FAST);
+  }
 
-    void slow_down() {
-      if (transition_iterations > 0) {
-        transition_iterations = 0;
-      } else if (is_fast()) {
-        transition_iterations = LOOPS_SLOW_DOWN;
-      }
-      write_speed(OFF);
+  void slow_down() {
+    if (transition_iterations > 0) {
+      transition_iterations = 0;
+    } else if (is_fast()) {
+      transition_iterations = LOOPS_SLOW_DOWN;
     }
+    write_speed(OFF);
+  }
 };
 
-enum LocalNotice : uint8_t { PRIORITY_NOTICES = 128, MISSED_PACKET = PRIORITY_NOTICES,
-                             REGISTER_ACTUAL, REGISTER_AGAIN, DEREGISTER_ACTUAL, DEREGISTER_AGAIN, DEREGISTER_ALL,
-                             GOING_NOWHERE, GOING_UP, GOING_DOWN
-                           };
+enum LocalNotice : uint8_t {
+  PRIORITY_NOTICES = 128,
+  MISSED_PACKET = PRIORITY_NOTICES,
+  REGISTER_ACTUAL,
+  REGISTER_AGAIN,
+  DEREGISTER_ACTUAL,
+  DEREGISTER_AGAIN,
+  DEREGISTER_ALL,
+  GOING_NOWHERE,
+  GOING_UP,
+  GOING_DOWN
+};
 
 static uint16_t note1(uint8_t beeps_buzzing) {
   switch (beeps_buzzing) {
@@ -87,35 +105,35 @@ static uint16_t note1(uint8_t beeps_buzzing) {
     case DEREGISTER_ALL:
     case GOING_NOWHERE:
     case GOING_UP:
-    case GOING_DOWN:        return NOTE_E5;
+    case GOING_DOWN: return NOTE_E5;
     case MISSED_PACKET:
-    default:                return NOTE_A2;
+    default: return NOTE_A2;
   }
 }
 
 static uint16_t note2(uint8_t beeps_buzzing) {
   switch (beeps_buzzing) {
     case REGISTER_ACTUAL:
-    case REGISTER_AGAIN:    return NOTE_E6;
+    case REGISTER_AGAIN: return NOTE_E6;
     case DEREGISTER_ACTUAL:
-    case DEREGISTER_AGAIN:  return NOTE_A4;
-    case DEREGISTER_ALL:    return NOTE_A3;
-    case GOING_NOWHERE:     return NOTE_E5;
-    case GOING_UP:          return NOTE_A5;
-    case GOING_DOWN:        return NOTE_A4;
-    case MISSED_PACKET:     return NOTE_A2;
-    default:                return NOTE_E3;
+    case DEREGISTER_AGAIN: return NOTE_A4;
+    case DEREGISTER_ALL: return NOTE_A3;
+    case GOING_NOWHERE: return NOTE_E5;
+    case GOING_UP: return NOTE_A5;
+    case GOING_DOWN: return NOTE_A4;
+    case MISSED_PACKET: return NOTE_A2;
+    default: return NOTE_E3;
   }
 }
 
 static uint16_t note3(uint8_t beeps_buzzing) {
   switch (beeps_buzzing) {
-    case REGISTER_ACTUAL:   return NOTE_A6;
-    case REGISTER_AGAIN:    return NOTE_E6;
+    case REGISTER_ACTUAL: return NOTE_A6;
+    case REGISTER_AGAIN: return NOTE_E6;
     case DEREGISTER_ACTUAL: return NOTE_E4;
-    case DEREGISTER_AGAIN:  return NOTE_A4;
-    case DEREGISTER_ALL:    return NOTE_E3;
-    default:                return 0;
+    case DEREGISTER_AGAIN: return NOTE_A4;
+    case DEREGISTER_ALL: return NOTE_E3;
+    default: return 0;
   }
 }
 
@@ -128,32 +146,32 @@ static bool is_time_to_publish() {
   return duration_from_to(primary_notice_time, micros()) >= BitsReceiver::TRAIN_TIMEOUT;
 }
 
-template <bool enable> struct SerialOrNot_t;
-template <> struct SerialOrNot_t<false> {
+template<bool enable> struct SerialOrNot_t;
+template<> struct SerialOrNot_t<false> {
   void begin(long) {}
-  template <typename T> void print(T) {}
-  template <typename T, typename F> void print(T, F) {}
+  template<typename T> void print(T) {}
+  template<typename T, typename F> void print(T, F) {}
   void println() {}
-  template <typename T> void println(T) {}
-  template <typename T> void write(T) {}
+  template<typename T> void println(T) {}
+  template<typename T> void write(T) {}
 };
-template <> struct SerialOrNot_t<true> {
+template<> struct SerialOrNot_t<true> {
   void begin(long rate) {
     Serial.begin(rate);
   }
-  template <typename T> void print(T t) {
+  template<typename T> void print(T t) {
     Serial.print(t);
   }
-  template <typename T, typename F> void print(T t, F f) {
+  template<typename T, typename F> void print(T t, F f) {
     Serial.print(t, f);
   }
   void println() {
     Serial.println();
   }
-  template <typename T> void println(T t) {
+  template<typename T> void println(T t) {
     Serial.println(t);
   }
-  template <typename T> void write(T t) {
+  template<typename T> void write(T t) {
     Serial.write(t);
   }
 };
@@ -161,17 +179,17 @@ template <> struct SerialOrNot_t<true> {
 static SerialOrNot_t<LOG_EVENTS> SerialOrNot;
 
 struct EventLogger {
-  template <typename T> static void print(uint8_t notice, T t) {
+  template<typename T> static void print(uint8_t notice, T t) {
     if (notice > 0) {
       SerialOrNot.print(t);
     }
   }
-  template <typename T, typename F> static void print(uint8_t notice, T t, F f) {
+  template<typename T, typename F> static void print(uint8_t notice, T t, F f) {
     if (notice > 0) {
       SerialOrNot.print(t, f);
     }
   }
-  template <typename T> static void println(uint8_t notice, T t) {
+  template<typename T> static void println(uint8_t notice, T t) {
     if (notice > 0) {
       SerialOrNot.println(t);
       if (notice > primary_notice) {
@@ -214,12 +232,14 @@ void setup() {
   pinMode(PIN_OUT_SLOW, OUTPUT);
   pinMode(PIN_OUT_FAST, OUTPUT);
   receiver.setup();
-  attachInterrupt(INT_ASK, []() {
-    if (!receiver.handle_rise()) {
-      primary_notice = MISSED_PACKET;
-      SerialOrNot.println("Buffer not timely processed by main loop");
-    }
-  }, RISING);
+  attachInterrupt(
+    INT_ASK, []() {
+      if (!receiver.handle_rise()) {
+        primary_notice = MISSED_PACKET;
+        SerialOrNot.println("Buffer not timely processed by main loop");
+      }
+    },
+    RISING);
 
   transmitterButtonStorage.load();
   dump_transmitters_and_buttons("Initial");
@@ -296,8 +316,8 @@ static void heartbeat() {
 }
 
 static void buzz_primary_notice() {
-  static uint8_t beeps_buzzing = 0; // one of the PRIORITY_NOTICES, or number of beeps remaining to sound
-  static uint8_t iterations; // active when beeps_buzzing > 0
+  static uint8_t beeps_buzzing = 0;  // one of the PRIORITY_NOTICES, or number of beeps remaining to sound
+  static uint8_t iterations;         // active when beeps_buzzing > 0
 
   if (primary_notice > 0) {
     if (primary_notice >= PRIORITY_NOTICES || (!beeps_buzzing && is_time_to_publish())) {
@@ -341,7 +361,7 @@ void loop() {
   static uint8_t iterations_learning = LOOPS_LEARNING;
   static SpeedRegulator speed_regulator;
 
-  delay(LOOP_MILLIS); // save energy & provide good enough intervals
+  delay(LOOP_MILLIS);  // save energy & provide good enough intervals
 
   if (iterations_learning > 0) {
     if (--iterations_learning == 0) {
@@ -361,7 +381,7 @@ void loop() {
 
   uint32_t bits;
   while (receiver.receive<EventLogger, LOG_TIMING>(bits)) {
-    const Packet packet { bits };
+    const Packet packet{ bits };
     const bool recognized = transmitterButtonStorage.recognizes(packet);
     dump_transmitter_and_button("Received", packet);
     SerialOrNot.println(packet.on_or_off() ? "①" : "⓪");
@@ -370,7 +390,7 @@ void loop() {
         iterations_learning = LOOPS_LEARNING;
       }
     } else if (!recognized) {
-      primary_notice = GOING_NOWHERE; // also supersede errors from initial packet(s) in the packet train
+      primary_notice = GOING_NOWHERE;  // also supersede errors from initial packet(s) in the packet train
     } else if (packet.on_or_off()) {
       primary_notice = GOING_UP;
       speed_regulator.speed_up();
