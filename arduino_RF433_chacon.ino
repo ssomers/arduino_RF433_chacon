@@ -174,7 +174,7 @@ struct EventLogger {
 static BitsReceiver receiver;
 static TransmitterButtonStorage transmitterButtonStorage;
 
-static void dump_transmitter_and_button(const char* prefix, Packet packet) {
+static void dump_transmitter_and_button(const char* prefix, ChaconPacket packet) {
   SerialOrNot.print(prefix);
   SerialOrNot.print(" transmitter ");
   SerialOrNot.print(packet.transmitter(), HEX);
@@ -189,7 +189,7 @@ static void dump_transmitter_and_button(const char* prefix, Packet packet) {
 
 static void dump_transmitters_and_buttons(const char* prefix) {
   for (int i = 0; i < transmitterButtonStorage.count(); ++i) {
-    dump_transmitter_and_button(prefix, Packet(transmitterButtonStorage.get(i)));
+    dump_transmitter_and_button(prefix, ChaconPacket(transmitterButtonStorage.get(i)));
     SerialOrNot.println();
   }
 }
@@ -220,7 +220,7 @@ void setup() {
   delay(150);
 }
 
-static bool learn(Packet packet) {
+static bool learn(ChaconPacket packet) {
   if (packet.multicast()) {
     if (!packet.on_or_off()) {
       SerialOrNot.println("Received wipe");
@@ -352,7 +352,7 @@ void loop() {
 
   uint32_t bits;
   while (receiver.receive<EventLogger, LOG_TIMING>(bits)) {
-    const Packet packet{ bits };
+    const ChaconPacket packet{ bits };
     const bool recognized = transmitterButtonStorage.recognizes(packet);
     dump_transmitter_and_button("Received", packet);
     SerialOrNot.println(packet.on_or_off() ? "①" : "⓪");

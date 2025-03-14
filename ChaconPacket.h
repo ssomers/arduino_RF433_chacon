@@ -1,8 +1,8 @@
-class Packet {
+class ChaconPacket {
   const uint32_t bits;
 
 public:
-  explicit Packet(uint32_t bits)
+  explicit ChaconPacket(uint32_t bits)
     : bits(bits) {}
 
   bool matches(uint32_t some_transmitter_and_button) const {

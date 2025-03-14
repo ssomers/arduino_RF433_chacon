@@ -1,5 +1,5 @@
 #include <avr/eeprom.h>
-#include "Packet.h"
+#include "ChaconPacket.h"
 
 class TransmitterButtonStorage {
   static const uint8_t TRANSMITTER_BUTTONS_STORED = 4;
@@ -32,7 +32,7 @@ public:
     return transmitter_buttons[index];
   }
 
-  bool recognizes(Packet packet) const {
+  bool recognizes(ChaconPacket packet) const {
     for (uint8_t i = 0; i < transmitter_button_count; ++i) {
       if (packet.matches(transmitter_buttons[i])) {
         return true;
@@ -42,7 +42,7 @@ public:
   }
 
   bool remember(uint32_t some_transmitter_button) {
-    if (!recognizes(Packet(some_transmitter_button))) {
+    if (!recognizes(ChaconPacket(some_transmitter_button))) {
       if (transmitter_button_count == TRANSMITTER_BUTTONS_STORED) {
         for (uint8_t i = 1; i < TRANSMITTER_BUTTONS_STORED; ++i) {
           transmitter_buttons[i - 1] = transmitter_buttons[i];
