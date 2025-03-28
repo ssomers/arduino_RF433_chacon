@@ -6,7 +6,7 @@ inline uint32_t duration_from_to(uint32_t early, uint32_t later) {
   return later - early;
 }
 
-template<uint8_t BUFFERS, uint8_t MIN_GAPS, uint8_t REQUIRED_GAPS, uint8_t TIME_SCALING, uint16_t PACKET_GAP_TIMEOUT, uint32_t PACKET_FINAL_TIMEOUT>
+template<uint8_t BUFFERS, uint8_t MIN_VIABLE_GAPS, uint8_t REQUIRED_GAPS, uint8_t TIME_SCALING, uint16_t PACKET_GAP_TIMEOUT, uint32_t PACKET_FINAL_TIMEOUT>
 class GapTracker {
 public:
   using Width = uint8_t;
@@ -14,13 +14,13 @@ public:
 
 private:
   Buffer buffers[BUFFERS];
-  uint32_t last_rise_micros[BUFFERS];
+  uint32_t last_interrupt_micros[BUFFERS];
   uint8_t buffer_incoming = 0;
   uint8_t buffer_outgoing = 0;
   struct Flags {
-    bool first_rise_seen : 1;
+    bool first_interrupt_seen : 1;
     bool alive : 1;
-    Flags() : first_rise_seen(false), alive(false) {}
+    Flags() : first_interrupt_seen(false), alive(false) {}
   } flags;
 
   static uint8_t next_buffer(uint8_t b) {
@@ -35,11 +35,11 @@ private:
       return true;
     }
     if (buffers[buffer_incoming].size() == REQUIRED_GAPS) {
-      const int32_t last = last_rise_micros[buffer_incoming];
+      const int32_t last = last_interrupt_micros[buffer_incoming];
       if (duration_from_to(last, now) >= PACKET_FINAL_TIMEOUT) {
         // revert to initial state
         buffer_incoming = next_buffer(buffer_incoming);
-        flags.first_rise_seen = false;
+        flags.first_interrupt_seen = false;
         return true;
       }
     }
@@ -53,19 +53,18 @@ public:
     Optional<uint8_t> preceding_gap_width;  // in ųs shifted by TIME_SCALING
     bool keeping_up = true;
 
-    if (flags.first_rise_seen) {
-      const uint32_t duration = duration_from_to(last_rise_micros[buffer_incoming], now);
-      if (duration < PACKET_GAP_TIMEOUT) {
+    if (flags.first_interrupt_seen) {
+      const uint8_t handled_gaps = buffers[buffer_incoming].size();
+      const uint32_t gap_duration = duration_from_to(last_interrupt_micros[buffer_incoming], now);
+      if (gap_duration < PACKET_GAP_TIMEOUT) {
         static_assert(((PACKET_GAP_TIMEOUT - 1) >> TIME_SCALING) < 0x100);
-        preceding_gap_width = uint8_t(uint16_t(duration) >> TIME_SCALING);
-      } else {
-        if (buffers[buffer_incoming].size() >= MIN_GAPS) {
-          buffer_incoming = next_buffer(buffer_incoming);
-          keeping_up = (buffer_incoming != buffer_outgoing);
-        }
+        preceding_gap_width = uint8_t(uint16_t(gap_duration) >> TIME_SCALING);
+      } else if (handled_gaps >= MIN_VIABLE_GAPS) {
+        buffer_incoming = next_buffer(buffer_incoming);
+        keeping_up = (buffer_incoming != buffer_outgoing);
       }
     }
-    flags.first_rise_seen = true;
+    flags.first_interrupt_seen = true;
     flags.alive = true;
 
     if (preceding_gap_width.has_value()) {
@@ -73,7 +72,7 @@ public:
     } else {
       buffers[buffer_incoming].reset();
     }
-    last_rise_micros[buffer_incoming] = now;
+    last_interrupt_micros[buffer_incoming] = now;
     return keeping_up;
   }
 
@@ -83,7 +82,7 @@ public:
     const bool ready = finalize_buffer_offline(now);
     interrupts();
     if (ready) {
-      receive(buffers[buffer_outgoing], last_rise_micros[buffer_outgoing]);
+      receive(buffers[buffer_outgoing], last_interrupt_micros[buffer_outgoing]);
       buffer_outgoing = next_buffer(buffer_outgoing);
     }
     return ready;

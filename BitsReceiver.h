@@ -20,7 +20,7 @@ public:
 private:
   static const uint8_t BUFFERS = 4;
   static const uint8_t REQUIRED_GAPS = 65;             // number of gaps between peaks forming a packet
-  static const uint8_t MIN_GAPS = 60;                  // number of gaps we want the tracker to consider viable
+  static const uint8_t MIN_VIABLE_GAPS = 60;           // number of gaps we want the tracker to consider diagnosing
   static const uint8_t TIME_SCALING = 5;               // how many bits to right-shift measured times in µs, for recording gap widths
   static const uint32_t PACKET_GAP_TIMEOUT = 0x2000;   // in µs, wider gap implies a delimiter
   static const uint32_t PACKET_FINAL_TIMEOUT = 0x800;  // in µs, more implies there's something following an otherwise legit packet
@@ -31,7 +31,7 @@ private:
   static const uint8_t MIN_PREAMBLE = 60;          // in scaled gap width
   static const uint8_t MAX_PREAMBLE = 120;         // in scaled gap width
 
-  using MyGapTracker = GapTracker<BUFFERS, MIN_GAPS, REQUIRED_GAPS, TIME_SCALING, PACKET_GAP_TIMEOUT, PACKET_FINAL_TIMEOUT>;
+  using MyGapTracker = GapTracker<BUFFERS, MIN_VIABLE_GAPS, REQUIRED_GAPS, TIME_SCALING, PACKET_GAP_TIMEOUT, PACKET_FINAL_TIMEOUT>;
   using GapBuffer = MyGapTracker::Buffer;
   MyGapTracker gap_tracker;
 
