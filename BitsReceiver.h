@@ -75,7 +75,7 @@ private:
   } state;
 
   static void dump(GapBuffer const& buffer, uint32_t time_received, uint32_t now) {
-    const uint8_t gap_count = min(REQUIRED_GAPS, buffer.size());
+    const uint8_t gap_count = min(REQUIRED_GAPS, buffer.gaps_seen);
     Serial.print("gap widths:");
     for (uint8_t p = 0; p < gap_count; ++p) {
       if (p % 16 == 1) {
@@ -83,7 +83,7 @@ private:
         Serial.print("  ");
       }
       Serial.print(" ");
-      Serial.print(buffer[p]);
+      Serial.print(buffer.gap_widths[p]);
     }
     Serial.println();
     Serial.print("  ");
@@ -99,7 +99,7 @@ private:
 
   template<typename EventLogger>
   static bool decode(GapBuffer const& buffer, bool seems_legit, uint32_t& bits_received) {
-    const uint8_t gap_count = buffer.size();
+    const uint8_t gap_count = buffer.gaps_seen;
     if (gap_count != REQUIRED_GAPS) {
       if (seems_legit) {
         const auto notice = gap_count > REQUIRED_GAPS        ? ProtocolNotice::EXCESS_GAPS
@@ -112,7 +112,7 @@ private:
       return false;
     }
 
-    const uint8_t preamble = buffer[0];
+    const uint8_t preamble = buffer.gap_widths[0];
     if (preamble < MIN_PREAMBLE || preamble > MAX_PREAMBLE) {
       if (seems_legit) {
         EventLogger::print(preamble);
@@ -127,7 +127,7 @@ private:
     uint8_t bit_errors = 0;
     bits_received = 0;
     for (uint8_t p = 1; p < REQUIRED_GAPS; ++p) {
-      const uint8_t gap_width = buffer[p];
+      const uint8_t gap_width = buffer.gap_widths[p];
       if (gap_width < MIN_WIDE_GAP_WIDTH) {
         spacing_errors += (gap_width < MIN_NARROW_GAP_WIDTH);
         spacing_errors += (gap_width > MAX_NARROW_GAP_WIDTH);
@@ -188,7 +188,8 @@ public:
     const uint32_t now = micros();
     bool new_was_decodable;
     uint32_t new_time_received;
-    auto process = [&](GapBuffer const& buffer, uint32_t time_received) {
+    auto process = [&](GapBuffer const& buffer) {
+      const uint32_t time_received = buffer.last_interrupt_micros;
       const bool seems_legit = !state.is_settling_down(time_received);
       new_was_decodable = decode<EventLogger>(buffer, seems_legit, bits_received);
       new_time_received = time_received;

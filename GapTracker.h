@@ -1,4 +1,3 @@
-#include "TruncatingVector.h"
 #include "Optional.h"
 
 // Positive even if microseconds have rolled around.
@@ -10,17 +9,21 @@ template<uint8_t BUFFERS, uint8_t MIN_VIABLE_GAPS, uint8_t REQUIRED_GAPS, uint8_
 class GapTracker {
 public:
   using Width = uint8_t;
-  using Buffer = TruncatingVector<uint8_t, REQUIRED_GAPS, Width>;
+  struct Buffer {
+    uint32_t last_interrupt_micros;
+    Width gap_widths[REQUIRED_GAPS];
+    uint8_t gaps_seen;
+  };
 
 private:
   Buffer buffers[BUFFERS];
-  uint32_t last_interrupt_micros[BUFFERS];
   uint8_t buffer_incoming = 0;
   uint8_t buffer_outgoing = 0;
   struct Flags {
     bool first_interrupt_seen : 1;
     bool alive : 1;
-    Flags() : first_interrupt_seen(false), alive(false) {}
+    Flags()
+      : first_interrupt_seen(false), alive(false) {}
   } flags;
 
   static uint8_t next_buffer(uint8_t b) {
@@ -34,10 +37,11 @@ private:
     if (buffer_outgoing != buffer_incoming) {
       return true;
     }
-    if (buffers[buffer_incoming].size() == REQUIRED_GAPS) {
-      const int32_t last = last_interrupt_micros[buffer_incoming];
+    Buffer const& buffer = buffers[buffer_incoming];
+    if (buffer.gaps_seen == REQUIRED_GAPS) {
+      const int32_t last = buffer.last_interrupt_micros;
       if (duration_from_to(last, now) >= PACKET_FINAL_TIMEOUT) {
-        // revert to initial state
+        // Revert to initial state in a new buffer.
         buffer_incoming = next_buffer(buffer_incoming);
         flags.first_interrupt_seen = false;
         return true;
@@ -48,18 +52,18 @@ private:
 
 public:
   bool handle_rise() {
-    // assume we're in an interrupt handler ourselves
+    // Assume we're in an interrupt handler ourselves.
     const uint32_t now = micros();
     Optional<uint8_t> preceding_gap_width;  // in ųs shifted by TIME_SCALING
     bool keeping_up = true;
 
+    Buffer& buffer = buffers[buffer_incoming];
     if (flags.first_interrupt_seen) {
-      const uint8_t handled_gaps = buffers[buffer_incoming].size();
-      const uint32_t gap_duration = duration_from_to(last_interrupt_micros[buffer_incoming], now);
+      const uint32_t gap_duration = duration_from_to(buffer.last_interrupt_micros, now);
       if (gap_duration < PACKET_GAP_TIMEOUT) {
         static_assert(((PACKET_GAP_TIMEOUT - 1) >> TIME_SCALING) < 0x100);
         preceding_gap_width = uint8_t(uint16_t(gap_duration) >> TIME_SCALING);
-      } else if (handled_gaps >= MIN_VIABLE_GAPS) {
+      } else if (buffer.gaps_seen >= MIN_VIABLE_GAPS) {
         buffer_incoming = next_buffer(buffer_incoming);
         keeping_up = (buffer_incoming != buffer_outgoing);
       }
@@ -68,11 +72,14 @@ public:
     flags.alive = true;
 
     if (preceding_gap_width.has_value()) {
-      buffers[buffer_incoming].push_back(preceding_gap_width.value());
+      if (buffer.gaps_seen < REQUIRED_GAPS) {
+        buffer.gap_widths[buffer.gaps_seen] = preceding_gap_width.value();
+      }
+      buffer.gaps_seen += 1;
     } else {
-      buffers[buffer_incoming].reset();
+      buffer.gaps_seen = 0;
     }
-    last_interrupt_micros[buffer_incoming] = now;
+    buffer.last_interrupt_micros = now;
     return keeping_up;
   }
 
@@ -82,7 +89,7 @@ public:
     const bool ready = finalize_buffer_offline(now);
     interrupts();
     if (ready) {
-      receive(buffers[buffer_outgoing], last_interrupt_micros[buffer_outgoing]);
+      receive(buffers[buffer_outgoing]);
       buffer_outgoing = next_buffer(buffer_outgoing);
     }
     return ready;
