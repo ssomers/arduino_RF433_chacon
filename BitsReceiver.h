@@ -23,7 +23,7 @@ private:
   static const uint8_t MIN_VIABLE_GAPS = 60;           // number of gaps we want the tracker to consider diagnosing
   static const uint8_t TIME_SCALING = 5;               // how many bits to right-shift measured times in µs, for recording gap widths
   static const uint32_t PACKET_GAP_TIMEOUT = 0x2000;   // in µs, wider gap implies a delimiter
-  static const uint32_t PACKET_FINAL_TIMEOUT = 0x800;  // in µs, more implies there's something following an otherwise legit packet
+  static const uint32_t PACKET_FINAL_TIMEOUT = 0x800;  // in µs, earlier gap implies packet isn't yet finished
 
   static const uint8_t MIN_NARROW_GAP_WIDTH = 12;  // in scaled gap width
   static const uint8_t MAX_NARROW_GAP_WIDTH = 24;  // in scaled gap width
@@ -83,7 +83,7 @@ private:
         Serial.print("  ");
       }
       Serial.print(" ");
-      Serial.print(buffer.gap_widths[p]);
+      Serial.print(buffer.gap_widths[p].raw());
     }
     Serial.println();
     Serial.print("  ");
@@ -112,7 +112,7 @@ private:
       return false;
     }
 
-    const uint8_t preamble = buffer.gap_widths[0];
+    const uint8_t preamble = buffer.gap_widths[0].raw();
     if (preamble < MIN_PREAMBLE || preamble > MAX_PREAMBLE) {
       if (seems_legit) {
         EventLogger::print(preamble);
@@ -127,7 +127,7 @@ private:
     uint8_t bit_errors = 0;
     bits_received = 0;
     for (uint8_t p = 1; p < REQUIRED_GAPS; ++p) {
-      const uint8_t gap_width = buffer.gap_widths[p];
+      const uint8_t gap_width = buffer.gap_widths[p].raw();
       if (gap_width < MIN_WIDE_GAP_WIDTH) {
         spacing_errors += (gap_width < MIN_NARROW_GAP_WIDTH);
         spacing_errors += (gap_width > MAX_NARROW_GAP_WIDTH);

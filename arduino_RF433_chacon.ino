@@ -18,6 +18,7 @@ enum { PIN_IN_ASK = 2,
        PIN_OUT_FAST,
        PIN_OUT_LED = LED_BUILTIN };
 static const int INT_ASK = digitalPinToInterrupt(PIN_IN_ASK);
+
 #else  // ATTiny85
 static const bool LOG_EVENTS = false;
 static const bool LOG_TIMING = false;
@@ -28,6 +29,7 @@ enum { PIN_OUT_SLOW = 0,
        PIN_OUT_BUZZER = 3,
        PIN_OUT_LED = 4 };
 static const int INT_ASK = 0;
+
 #endif
 
 class SpeedRegulator {
