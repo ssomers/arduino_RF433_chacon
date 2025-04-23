@@ -12,12 +12,12 @@ static const uint8_t LOOPS_PER_HEARTBEAT = 25;
 #ifdef ARDUINO_AVR_NANO
 static const bool LOG_EVENTS = true;
 static const bool LOG_TIMING = true;
-enum { PIN_IN_ASK = 2,
+enum { PIN_IN_SIGNAL = 2,
        PIN_OUT_BUZZER = 10,
        PIN_OUT_SLOW,
        PIN_OUT_FAST,
        PIN_OUT_LED = LED_BUILTIN };
-static const int INT_ASK = digitalPinToInterrupt(PIN_IN_ASK);
+static const int INT_SIGNAL = digitalPinToInterrupt(PIN_IN_SIGNAL);
 
 #else  // ATTiny85
 static const bool LOG_EVENTS = false;
@@ -25,10 +25,10 @@ static const bool LOG_TIMING = false;
 // Stay away from pins 3 and 4 for relay output, because they're flipped during boot.
 enum { PIN_OUT_SLOW = 0,
        PIN_OUT_FAST = 1,
-       PIN_IN_ASK = 2,
+       PIN_IN_SIGNAL = 2,
        PIN_OUT_BUZZER = 3,
        PIN_OUT_LED = 4 };
-static const int INT_ASK = 0;
+static const int INT_SIGNAL = 0;
 
 #endif
 
@@ -201,16 +201,21 @@ static void dump_button_pairs(const char* prefix) {
 void setup() {
   SerialOrNot.begin(115200);
 
-  pinMode(PIN_IN_ASK, INPUT);
+  pinMode(PIN_IN_SIGNAL, INPUT);
   pinMode(PIN_OUT_LED, OUTPUT);
   pinMode(PIN_OUT_BUZZER, OUTPUT);
   pinMode(PIN_OUT_SLOW, OUTPUT);
   pinMode(PIN_OUT_FAST, OUTPUT);
   attachInterrupt(
-    INT_ASK, []() {
-      if (!receiver.handle_rise()) {
-        primary_notice = uint8_t(LocalNotice::MISSED_PACKET);
-        SerialOrNot.println("Buffer not timely processed by main loop");
+    INT_SIGNAL, []() {
+      auto handling_error = receiver.handle_rise();
+      switch (handling_error) {
+        case HandlingError::None:
+          break;
+        case HandlingError::RanOutOfBuffers:
+          primary_notice = uint8_t(LocalNotice::MISSED_PACKET);
+          SerialOrNot.println("Buffers not timely processed by main loop");
+          break;
       }
     },
     RISING);

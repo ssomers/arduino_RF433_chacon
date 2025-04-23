@@ -5,6 +5,11 @@ inline uint32_t duration_from_to(uint32_t early, uint32_t later) {
   return later - early;
 }
 
+enum class HandlingError {
+  None,
+  RanOutOfBuffers,
+};
+
 template<uint8_t BUFFERS, uint8_t MIN_VIABLE_GAPS, uint8_t REQUIRED_GAPS, uint8_t TIME_SCALING, uint16_t PACKET_GAP_TIMEOUT, uint32_t PACKET_FINAL_TIMEOUT>
 class GapTracker {
 public:
@@ -86,31 +91,36 @@ public:
   // And obviously returns quickly.
   // Returns whether timing looks all right, i.e.:
   // - that that we didn't fill all the buffers before receive_buffer got a chance to handle them.
-  bool handle_rise() {
+  HandlingError handle_rise() {
     const uint32_t now = micros();
-    bool valid = true;
-
+    HandlingError error = HandlingError::None;
+    uint8_t gaps_seen = 0;
     Buffer& buffer = buffers[buffer_incoming];
+
     if (flags.first_interrupt_seen) {
+      gaps_seen = buffer.gaps_seen;
       const uint32_t gap_duration = duration_from_to(buffer.last_interrupt_micros, now);
       GapWidth preceding_gap_width;
       if (preceding_gap_width.try_assign(gap_duration)) {
-        if (buffer.gaps_seen < REQUIRED_GAPS) {
-          buffer.gap_widths[buffer.gaps_seen] = preceding_gap_width;
+        if (gaps_seen < REQUIRED_GAPS) {
+          buffer.gap_widths[gaps_seen] = preceding_gap_width;
         }
-        buffer.gaps_seen += 1;
+        gaps_seen += 1;
       } else {
-        if (buffer.gaps_seen >= MIN_VIABLE_GAPS) {
+        if (gaps_seen >= MIN_VIABLE_GAPS) {
           buffer_incoming = next_buffer(buffer_incoming);
-          valid = (buffer_incoming != buffer_outgoing);
+          if (buffer_incoming == buffer_outgoing) {
+            error = HandlingError::RanOutOfBuffers;
+          }
         }
-        buffer.gaps_seen = 0;
+        gaps_seen = 0;
       }
     }
     flags.first_interrupt_seen = true;
     flags.alive = true;
+    buffer.gaps_seen = gaps_seen;
     buffer.last_interrupt_micros = now;
-    return valid;
+    return error;
   }
 
   template<typename Receive>

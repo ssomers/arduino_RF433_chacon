@@ -136,7 +136,7 @@ public:
     packet_train_tracker.setup(now);
   }
 
-  bool handle_rise() {
+  HandlingError handle_rise() {
     return gap_tracker.handle_rise();
   }
 
