@@ -206,7 +206,6 @@ void setup() {
   pinMode(PIN_OUT_BUZZER, OUTPUT);
   pinMode(PIN_OUT_SLOW, OUTPUT);
   pinMode(PIN_OUT_FAST, OUTPUT);
-  receiver.setup();
   attachInterrupt(
     INT_ASK, []() {
       if (!receiver.handle_rise()) {
@@ -222,6 +221,9 @@ void setup() {
 
   tone(PIN_OUT_BUZZER, NOTE_A6, 75);
   delay(150);
+
+  const uint32_t now = micros();
+  receiver.setup(now);
 }
 
 static bool learn(ChaconPacket packet) {
@@ -337,6 +339,7 @@ void loop() {
   static SpeedRegulator speed_regulator;
 
   delay(LOOP_DELAY_MILLIS);
+  const uint32_t now = micros();
 
   if (iterations_learning > 0) {
     if (--iterations_learning == 0) {
@@ -355,7 +358,7 @@ void loop() {
   }
 
   uint32_t bits;
-  while (receiver.receive<EventLogger, LOG_TIMING>(bits)) {
+  while (receiver.receive<EventLogger, LOG_TIMING>(now, bits)) {
     const ChaconPacket packet{ bits };
     const bool recognized = transmitterButtonStorage.recognizes(packet);
     dump_packet("Received", packet);

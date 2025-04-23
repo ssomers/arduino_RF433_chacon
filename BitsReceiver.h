@@ -1,5 +1,5 @@
 #include "GapTracker.h"
-#include "Optional.h"
+#include "PacketTrainTracker.h"
 
 enum class ProtocolNotice : uint8_t {
   MISSING_N_GAPS = 1,
@@ -34,45 +34,7 @@ private:
   using MyGapTracker = GapTracker<BUFFERS, MIN_VIABLE_GAPS, REQUIRED_GAPS, TIME_SCALING, PACKET_GAP_TIMEOUT, PACKET_FINAL_TIMEOUT>;
   using GapBuffer = MyGapTracker::Buffer;
   MyGapTracker gap_tracker;
-
-  class PacketTrainState {
-    Optional<uint32_t> last_bits_handled;
-    Optional<uint32_t> last_event_time;
-
-  public:
-    void setup(uint32_t now) {
-      last_bits_handled.reset();
-      last_event_time = now;
-    }
-
-    // Whether we are:
-    // - right after booting, when we may very well be tuning in at the middle of a broadcast;
-    // - right after successfully receiving a packet in a packet train, when our response
-    //   greatly deteriorates the reception quality of the rest of the packet train.
-    bool is_settling_down(uint32_t time_received) const {
-      return last_event_time.has_value()
-             && duration_from_to(last_event_time.value(), time_received) < TRAIN_TIMEOUT;
-    }
-
-    bool handle(uint32_t bits_received, uint32_t time_received) {
-      if (last_bits_handled.has_value()
-          && is_settling_down(time_received) && last_bits_handled.value() == bits_received) {
-        return false;  // looks like a repeat packet in the same train
-      } else {
-        last_bits_handled = bits_received;
-        last_event_time = time_received;
-        return true;
-      }
-    }
-
-    void catch_up(uint32_t now) {
-      // Every ~72 minutes, the time in ųs rolls over.
-      // Forget any last_event_time recorded in a previous era.
-      if (last_event_time.has_value() && duration_from_to(last_event_time.value(), now) & (uint32_t(2) << 31)) {
-        last_event_time.reset();
-      }
-    }
-  } state;
+  PacketTrainTracker<TRAIN_TIMEOUT> packet_train_tracker;
 
   static void dump(GapBuffer const& buffer, uint32_t time_received, uint32_t now) {
     const uint8_t gap_count = min(REQUIRED_GAPS, buffer.gaps_seen);
@@ -170,9 +132,8 @@ private:
   }
 
 public:
-  void setup() {
-    const uint32_t now = micros();
-    state.setup(now);
+  void setup(uint32_t now) {
+    packet_train_tracker.setup(now);
   }
 
   bool handle_rise() {
@@ -184,13 +145,12 @@ public:
   }
 
   template<typename EventLogger, bool logTiming>
-  bool receive(uint32_t& bits_received) {
-    const uint32_t now = micros();
+  bool receive(uint32_t now, uint32_t& bits_received) {
     bool new_was_decodable;
     uint32_t new_time_received;
     auto process = [&](GapBuffer const& buffer) {
       const uint32_t time_received = buffer.last_interrupt_micros;
-      const bool seems_legit = !state.is_settling_down(time_received);
+      const bool seems_legit = !packet_train_tracker.is_settling_down(time_received);
       new_was_decodable = decode<EventLogger>(buffer, seems_legit, bits_received);
       new_time_received = time_received;
       if (logTiming && seems_legit) {
@@ -199,12 +159,12 @@ public:
     };
 
     while (gap_tracker.receive_buffer(now, process)) {
-      if (new_was_decodable && state.handle(bits_received, new_time_received)) {
+      if (new_was_decodable && packet_train_tracker.handle(bits_received, new_time_received)) {
         return true;
       }
     }
 
-    state.catch_up(now);
+    packet_train_tracker.catch_up(now);
     return false;
   }
 };
